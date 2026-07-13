@@ -73,6 +73,16 @@ pgrep -fl 'PalmierPro|palmier' || true
 - `Sources/PalmierPro/Compositing/CustomVideoCompositor.swift` and `Sources/PalmierPro/Compositing/FrameRenderer.swift` render custom visual compositing.
 - `Sources/PalmierPro/Agent/Tools/` defines MCP/in-app agent tools, schemas, executors, and agent-facing instructions.
 
+## Social Audio Mix
+
+- Find it in Inspector > Audio > Social Audio Mix. The repeatable stack is Voice Cleanup first, then Social Audio Mix normalization, then speech-aware music ducking; authored volume/fades remain the final manual layer.
+- `Clip.socialAudio` persists the voice/music role, preset, measured loudness/sample peak, automatic gain, source-time speech activity, and music duck amount. Old projects decode with no social-audio recipe.
+- Balanced targets voice at -16 LUFS and music at -18 LUFS with 14 dB speech ducking; Clear Voice uses -16/-20 LUFS with 18 dB ducking. Conservative sample-peak headroom limits gain without adding a latency-producing live limiter.
+- Add Music imports a local audio file to a dedicated track and runs the same whole-project balance pass. The selected preset is remembered for future projects.
+- Analysis streams 48 kHz Float32 PCM, bounds hardware decoder concurrency to two jobs, and uses the cleaned proxy when Voice Cleanup is enabled. Preview and export consume persisted `AVAudioMix` gain ramps only, so the feature does not change clip timing or A/V sync.
+- Tests live in `Tests/PalmierProTests/Audio/AudioLoudnessAnalyzerTests.swift`, `SocialAudioDuckingTests.swift`, `SocialAudioSettingsTests.swift`, and `SocialAudioCompositionTests.swift`.
+- After installing a new debug binary, fully quit and reopen Palmier Pro before expecting the controls to appear; do not force quit over an unsaved project.
+
 ## Persistence Rules
 
 For any feature that should survive save, quit, and reopen:
