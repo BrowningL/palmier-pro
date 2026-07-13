@@ -3,6 +3,7 @@ import CoreText
 import QuartzCore
 
 final class TextGlyphLayer: CALayer {
+    private(set) var renderedImage: CGImage?
     private var attributed: NSAttributedString?
     private var inset: CGFloat = 0
     private var renderedString: NSAttributedString?
@@ -20,6 +21,7 @@ final class TextGlyphLayer: CALayer {
         guard let attributed, attributed.length > 0,
               bounds.width >= 1, bounds.height >= 1 else {
             contents = nil
+            renderedImage = nil
             renderedString = nil
             return
         }
@@ -58,7 +60,8 @@ final class TextGlyphLayer: CALayer {
             nil
         )
         CTFrameDraw(frame, context)
-        contents = context.makeImage()
+        renderedImage = context.makeImage()
+        contents = renderedImage
         renderedString = attributed.copy() as? NSAttributedString
         renderedSize = bounds.size
         renderedScale = scale

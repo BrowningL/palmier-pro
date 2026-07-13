@@ -84,7 +84,7 @@ struct TextStrokeTests {
 
         let layer = TextClipLayer.make(contentsScale: 1)
         layer.apply(clip: clip, containerSize: CGSize(width: 600, height: 1_080))
-        let image = try #require(layer.glyphs.contents as? CGImage)
+        let image = try #require(layer.glyphs.renderedImage)
         let pixels = rgbaPixels(image)
         var red = 0
         var white = 0
