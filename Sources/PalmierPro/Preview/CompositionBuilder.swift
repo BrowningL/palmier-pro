@@ -31,6 +31,12 @@ enum CompositionBuilder {
         var errorDescription: String? { "Invalid timeline: \(reason)" }
     }
 
+    struct VoiceCleanupError: LocalizedError {
+        let clipId: String
+        let reason: String
+        var errorDescription: String? { "Could not clean audio for clip \(clipId): \(reason)" }
+    }
+
     static func build(
         timeline: Timeline,
         resolveURL: @Sendable (String) -> URL?,
@@ -284,6 +290,19 @@ enum CompositionBuilder {
             }
         } else if mediaType == .video {
             mediaURL = (try? await AlphaVideoNormalizer.premultipliedVideo(for: resolved, mediaRef: clip.mediaRef)) ?? resolved
+        } else if mediaType == .audio, let cleanup = clip.voiceCleanup {
+            do {
+                mediaURL = try await VoiceCleanupCache.shared.processedURL(
+                    sourceURL: resolved,
+                    strength: cleanup.normalizedStrength
+                )
+            } catch {
+                Log.preview.error(
+                    "voice cleanup failed. clipId=\(clip.id) "
+                        + "mediaRef=\(clip.mediaRef) error=\(Log.detail(error))"
+                )
+                throw VoiceCleanupError(clipId: clip.id, reason: error.localizedDescription)
+            }
         } else {
             mediaURL = resolved
         }

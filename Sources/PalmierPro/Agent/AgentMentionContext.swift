@@ -81,7 +81,7 @@ enum AgentMentionContext {
         }
         let track = editor.timeline.tracks[loc.trackIndex]
         let clip = track.clips[loc.clipIndex]
-        return [
+        var summary: [String: Any] = [
             "clipId": clip.id,
             "mediaRef": clip.mediaRef,
             "mediaType": clip.mediaType.rawValue,
@@ -97,6 +97,10 @@ enum AgentMentionContext {
             "speed": clip.speed,
             "blendMode": clip.blendMode.rawValue,
         ]
+        if let cleanup = clip.voiceCleanup {
+            summary["voiceCleanup"] = ["strength": cleanup.normalizedStrength]
+        }
+        return summary
     }
 }
 

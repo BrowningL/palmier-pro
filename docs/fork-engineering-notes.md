@@ -143,6 +143,17 @@ Use `difference` with a white logo PNG to invert the background through the logo
 
 Markers are exact project-frame anchors. They do not render and do not lengthen exports.
 
+### Voice Cleanup
+
+- Model: optional `Clip.voiceCleanup` with a persisted `VoiceCleanupSettings.strength` (0–1). Legacy projects decode with cleanup disabled.
+- Inspector: select an audio clip, then use Audio -> Voice Cleanup -> Remove Noise and Strength. This is speech isolation; the visual "Noise Reduction" control under Adjust remains a Core Image effect for picture noise.
+- Processing: `VoiceCleanupRenderer` hosts Apple's `kAudioUnitSubType_AUSoundIsolation` in High Quality Voice mode inside an offline `AVAudioEngine`. It queries the audio unit's latency after startup, discards that delay, and writes exactly the decoded source sample count so cleaned speech remains in lip sync.
+- Cache: `VoiceCleanupCache` writes lossless 24-bit ALAC/CAF proxies under `~/Library/Caches/PalmierPro/VoiceCleanup`. Its key includes the source path, file size, modification time, algorithm version, and exact normalized strength. Renders are deduplicated, serialized to control CPU/thermal load, and atomically published; zero strength bypasses processing.
+- Preview/export: `CompositionBuilder` substitutes the cached proxy before normal speed, volume, fade, and keyframe handling, so timeline playback, timeline rendering, and final export share the same cleaned audio. A cleanup failure aborts the rebuild/export instead of silently producing raw audio. Save Audio Clip as Media also uses the proxy. The separate `P` audition tool currently plays the source URL directly.
+- Agent/MCP: `set_clip_properties` accepts `voiceCleanupEnabled` and `voiceCleanupStrength` for audio clips. The shared schema covers the in-app agent and MCP clients.
+- Interchange: XML/FCPXML exports do not carry this custom recipe; export rendered media when the cleaned result must leave Palmier Pro.
+- Tests: `VoiceCleanupTests` covers legacy decoding, persistence, latency-compensated rendering, composition integration, and corrupt-cache regeneration. `VoiceCleanupToolTests` covers agent mutation and validation.
+
 ### Luma Key
 
 - Effect id: `key.luma`

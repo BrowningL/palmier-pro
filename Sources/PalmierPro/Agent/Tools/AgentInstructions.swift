@@ -57,9 +57,12 @@ enum AgentInstructions {
             exact timeline anchors. When the user says "place it at marker X", use marker X's \
             frame as add_clips.startFrame.
           • set_clip_properties: apply the same values (durationFrames, trim, speed, volume, \
-            opacity, blendMode, transform, or text-style fields) to one or more clipIds. For per-clip \
+            voice cleanup, opacity, blendMode, transform, or text-style fields) to one or more clipIds. For per-clip \
             differences, make separate calls. Setting volume or opacity here clears any \
             existing keyframes on that property.
+            For dialogue recorded with background noise, set voiceCleanupEnabled=true on the \
+            audio clip. Start with voiceCleanupStrength=1; lower it if full isolation sounds \
+            over-processed. Cleanup is on-device and is used in both preview and export.
             Use blendMode='difference' on a white logo PNG to make the logo invert the lower \
             tracks through its alpha; use 'exclusion' for a softer version.
             For Creator Connect-style text, use fontName='Space Grotesk' for titles/body and \

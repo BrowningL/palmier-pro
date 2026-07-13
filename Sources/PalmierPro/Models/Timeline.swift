@@ -131,6 +131,7 @@ struct Clip: Codable, Sendable, Equatable, Identifiable {
     var trimEndFrame: Int = 0
     var speed: Double = 1.0
     var volume: Double = 1.0
+    var voiceCleanup: VoiceCleanupSettings?
     var fadeInFrames: Int = 0
     var fadeOutFrames: Int = 0
     var fadeInInterpolation: Interpolation = .linear
@@ -158,7 +159,7 @@ struct Clip: Codable, Sendable, Equatable, Identifiable {
 
     private enum CodingKeys: String, CodingKey {
         case id, mediaRef, mediaType, sourceClipType, startFrame, durationFrames
-        case trimStartFrame, trimEndFrame, speed, volume
+        case trimStartFrame, trimEndFrame, speed, volume, voiceCleanup
         case fadeInFrames, fadeOutFrames, fadeInInterpolation, fadeOutInterpolation
         case opacity, blendMode, transform, crop
         case linkGroupId, captionGroupId, textContent, textStyle
@@ -391,6 +392,7 @@ extension Clip {
             trimEndFrame: (try? c.decode(Int.self, forKey: .trimEndFrame)) ?? 0,
             speed: (try? c.decode(Double.self, forKey: .speed)) ?? 1.0,
             volume: (try? c.decode(Double.self, forKey: .volume)) ?? 1.0,
+            voiceCleanup: try? c.decode(VoiceCleanupSettings.self, forKey: .voiceCleanup),
             fadeInFrames: (try? c.decode(Int.self, forKey: .fadeInFrames)) ?? 0,
             fadeOutFrames: (try? c.decode(Int.self, forKey: .fadeOutFrames)) ?? 0,
             fadeInInterpolation: (try? c.decode(Interpolation.self, forKey: .fadeInInterpolation)) ?? .linear,

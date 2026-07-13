@@ -19,6 +19,8 @@ extension InspectorView {
                         .padding(.trailing, KeyframesMetrics.controlsColumnWidth + AppTheme.Spacing.sm)
                     fadeRow(label: "Fade Out", clips: audios, edge: .right)
                         .padding(.trailing, KeyframesMetrics.controlsColumnWidth + AppTheme.Spacing.sm)
+                    voiceCleanupSection(audios: audios)
+                        .padding(.top, AppTheme.Spacing.md)
                     if nonTextVisualClips.isEmpty {
                         speedSection(clips: audios)
                             .padding(.trailing, KeyframesMetrics.controlsColumnWidth + AppTheme.Spacing.sm)
@@ -40,6 +42,7 @@ extension InspectorView {
                     fadeRow(label: "Fade In", clips: audios, edge: .left)
                     fadeRow(label: "Fade Out", clips: audios, edge: .right)
                 }
+                voiceCleanupSection(audios: audios)
                 if nonTextVisualClips.isEmpty {
                     speedSection(clips: audios)
                 }
@@ -47,6 +50,50 @@ extension InspectorView {
         }
 
         keyframesToggleBar(enabled: single != nil)
+    }
+
+    @ViewBuilder
+    private func voiceCleanupSection(audios: [Clip]) -> some View {
+        let enabled = sharedClipValue(audios) { $0.voiceCleanup != nil }
+        let showsStrength = audios.contains { $0.voiceCleanup != nil }
+
+        VStack(alignment: .leading, spacing: AppTheme.Spacing.smMd) {
+            sectionTitleLabel(title: "Voice Cleanup")
+            propertyRow(label: "Remove Noise") {
+                Toggle("", isOn: Binding(
+                    get: { enabled ?? false },
+                    set: { editor.setVoiceCleanup(clipIds: audios.map(\.id), enabled: $0) }
+                ))
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .help("Isolate spoken voice and suppress background sound")
+            }
+            .frame(height: KeyframesMetrics.rowHeight)
+
+            if showsStrength {
+                propertyRow(label: "Strength") {
+                    ScrubbableNumberField(
+                        value: sharedClipValue(audios) { $0.voiceCleanup?.normalizedStrength ?? 0 },
+                        range: 0...1,
+                        displayMultiplier: 100,
+                        format: "%.0f",
+                        valueSuffix: "%",
+                        fieldWidth: 56,
+                        onChanged: {
+                            editor.applyVoiceCleanupStrength(clipIds: audios.map(\.id), strength: $0)
+                        }
+                    ) {
+                        editor.commitVoiceCleanupStrength(clipIds: audios.map(\.id), strength: $0)
+                    }
+                }
+                .frame(height: KeyframesMetrics.rowHeight)
+            }
+
+            Text("High Quality Voice · On-device")
+                .font(.system(size: AppTheme.FontSize.xs))
+                .foregroundStyle(AppTheme.Text.mutedColor)
+        }
     }
 
     @ViewBuilder

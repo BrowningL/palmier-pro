@@ -64,6 +64,8 @@ fileprivate struct SetClipPropertiesInput: DecodableToolArgs {
     let trimEndFrame: Int?
     let speed: Double?
     let volume: Double?
+    let voiceCleanupEnabled: Bool?
+    let voiceCleanupStrength: Double?
     let opacity: Double?
     let blendMode: String?
     let transform: ParsedTransform?
@@ -76,14 +78,15 @@ fileprivate struct SetClipPropertiesInput: DecodableToolArgs {
     static let allowedKeys: Set<String> = [
         "clipIds",
         "durationFrames", "trimStartFrame", "trimEndFrame", "speed",
-        "volume", "opacity", "blendMode",
+        "volume", "voiceCleanupEnabled", "voiceCleanupStrength", "opacity", "blendMode",
         "transform",
         "content", "fontName", "fontSize", "color", "alignment",
     ]
 
     var hasAnyProperty: Bool {
         durationFrames != nil || trimStartFrame != nil || trimEndFrame != nil
-            || speed != nil || volume != nil || opacity != nil || blendMode != nil
+            || speed != nil || volume != nil || voiceCleanupEnabled != nil
+            || voiceCleanupStrength != nil || opacity != nil || blendMode != nil
             || transform != nil
             || content != nil || fontName != nil || fontSize != nil
             || color != nil || alignment != nil
@@ -460,6 +463,12 @@ extension ToolExecutor {
         if let v = input.volume, !(0...1).contains(v) {
             throw ToolError("volume must be between 0 and 1 (got \(v))")
         }
+        if let v = input.voiceCleanupStrength, !(0...1).contains(v) {
+            throw ToolError("voiceCleanupStrength must be between 0 and 1 (got \(v))")
+        }
+        if input.voiceCleanupEnabled == false, input.voiceCleanupStrength != nil {
+            throw ToolError("voiceCleanupStrength cannot be combined with voiceCleanupEnabled=false")
+        }
         if let o = input.opacity, !(0...1).contains(o) {
             throw ToolError("opacity must be between 0 and 1 (got \(o))")
         }
@@ -498,6 +507,12 @@ extension ToolExecutor {
                 throw ToolError("blendMode applies only to video/image clips; rejected on: \(nonVisual.joined(separator: ", "))")
             }
         }
+        if input.voiceCleanupEnabled != nil || input.voiceCleanupStrength != nil {
+            let nonAudio = clipTypes.filter { $0.value != .audio }.map { $0.key }.sorted()
+            if !nonAudio.isEmpty {
+                throw ToolError("voice cleanup applies only to audio clips; rejected on: \(nonAudio.joined(separator: ", "))")
+            }
+        }
 
         // Expand timing fields to linked partners via the shared model helper.
         // Partners drop trim/speed when they're text — handled per-partner below.
@@ -518,6 +533,8 @@ extension ToolExecutor {
                     trimEndFrame: input.trimEndFrame,
                     speed: input.speed,
                     volume: input.volume,
+                    voiceCleanupEnabled: input.voiceCleanupEnabled,
+                    voiceCleanupStrength: input.voiceCleanupStrength,
                     opacity: input.opacity,
                     blendMode: blendMode,
                     transform: input.transform,
@@ -543,7 +560,8 @@ extension ToolExecutor {
                     trimStartFrame: partnerIsText ? nil : input.trimStartFrame,
                     trimEndFrame:   partnerIsText ? nil : input.trimEndFrame,
                     speed:          partnerIsText ? nil : input.speed,
-                    volume: nil, opacity: nil, blendMode: nil, transform: nil,
+                    volume: nil, voiceCleanupEnabled: nil, voiceCleanupStrength: nil,
+                    opacity: nil, blendMode: nil, transform: nil,
                     content: nil, fontName: nil, fontSize: nil, color: nil, alignment: nil,
                     clipId: partnerId,
                     editor: editor
@@ -562,6 +580,8 @@ extension ToolExecutor {
         trimEndFrame: Int?,
         speed: Double?,
         volume: Double?,
+        voiceCleanupEnabled: Bool?,
+        voiceCleanupStrength: Double?,
         opacity: Double?,
         blendMode: ClipBlendMode?,
         transform: ParsedTransform?,
@@ -596,6 +616,17 @@ extension ToolExecutor {
             }
             // Setting a scalar clears any existing keyframe track on the same property.
             if let v = volume         { clip.volume  = v; clip.volumeTrack  = nil; changed.append("volume") }
+            if voiceCleanupEnabled == false {
+                clip.voiceCleanup = nil
+                changed.append("voiceCleanupEnabled")
+            } else if voiceCleanupEnabled == true || voiceCleanupStrength != nil {
+                let strength = voiceCleanupStrength
+                    ?? clip.voiceCleanup?.normalizedStrength
+                    ?? VoiceCleanupSettings.defaultStrength
+                clip.voiceCleanup = VoiceCleanupSettings(strength: strength)
+                if voiceCleanupEnabled != nil { changed.append("voiceCleanupEnabled") }
+                if voiceCleanupStrength != nil { changed.append("voiceCleanupStrength") }
+            }
             if let v = opacity        { clip.opacity = v; clip.opacityTrack = nil; changed.append("opacity") }
             if let v = blendMode      { clip.blendMode = v; changed.append("blendMode") }
             if let t = transform {
