@@ -47,7 +47,7 @@ enum FCPXMLVersion: String, CaseIterable, Identifiable, Sendable {
 /// crop; opacity (+ keyframes); static volume.
 ///
 /// What does NOT: keyframed audio volume and audio fades (Resolve drops both itself); text
-/// background/border boxes (no FCPXML form); crop keyframes; title rotation/scale; color &
+/// background/custom glyph strokes (no FCPXML form); crop keyframes; title rotation/scale; color &
 /// effects; Lottie clips.
 ///
 /// Reference: https://developer.apple.com/documentation/professional-video-applications/fcpxml-reference

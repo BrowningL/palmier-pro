@@ -17,7 +17,10 @@ struct TextTab: View {
                 colorRow
                 opacitySlider
                 backgroundRow
-                borderRow
+                strokeRow
+                if style.border.enabled {
+                    strokeThicknessRow
+                }
                 shadowRow
             }
             InspectorSection("Layout") {
@@ -156,16 +159,54 @@ struct TextTab: View {
         )
     }
 
-    private var borderRow: some View {
-        toggleColorRow(
-            icon: "a.square",
-            label: "Border",
-            enabled: style.border.enabled,
-            color: style.border.color.swiftUIColor,
-            debounceKey: "borderColor",
-            setEnabled: { $0.border.enabled = $1 },
-            setColor: { $0.border.color = $1 }
-        )
+    private var strokeRow: some View {
+        InspectorRow(icon: "a.square", label: "Stroke") {
+            HStack(spacing: AppTheme.Spacing.sm) {
+                ColorField(
+                    displayColor: style.border.color.swiftUIColor,
+                    onUserChange: { new in
+                        editor.debouncedCommitTextStyle(clipId: clip.id, key: "strokeColor") {
+                            $0.border.color = TextStyle.RGBA(new)
+                        }
+                    }
+                )
+                .opacity(style.border.enabled ? AppTheme.Opacity.opaque : AppTheme.Opacity.medium)
+                .disabled(!style.border.enabled)
+                Toggle(
+                    "",
+                    isOn: Binding(
+                        get: { style.border.enabled },
+                        set: { new in
+                            editor.commitTextStyle(clipId: clip.id) { $0.border.enabled = new }
+                            editor.fitTextClipToContent(clipId: clip.id)
+                        }
+                    )
+                )
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+                .tint(Color.white.opacity(AppTheme.Opacity.strong))
+            }
+        }
+    }
+
+    private var strokeThicknessRow: some View {
+        InspectorRow(icon: "lineweight", label: "Thickness") {
+            ScrubbableNumberField(
+                value: style.border.clampedWidth,
+                range: TextStyle.Stroke.widthRange,
+                format: "%.1f",
+                valueSuffix: "%",
+                dragSensitivity: 0.2,
+                onChanged: { newVal in
+                    editor.applyTextStyle(clipId: clip.id) { $0.border.width = newVal }
+                    editor.fitTextClipToContent(clipId: clip.id)
+                }
+            ) { newVal in
+                editor.commitTextStyle(clipId: clip.id) { $0.border.width = newVal }
+                editor.fitTextClipToContent(clipId: clip.id)
+            }
+        }
     }
 
     private func toggleColorRow(

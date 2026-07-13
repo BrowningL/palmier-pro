@@ -9,7 +9,8 @@ struct TextStyle: Codable, Sendable, Equatable {
     var alignment: Alignment = .center
     var shadow: Shadow = Shadow()
     var background: Fill = Fill(enabled: false, color: RGBA(r: 0, g: 0, b: 0, a: 0.6))
-    var border: Fill = Fill(enabled: false, color: RGBA(r: 0, g: 0, b: 0, a: 1))
+    /// Kept as `border` in project JSON for compatibility; rendered as a glyph stroke.
+    var border: Stroke = Stroke()
 
     enum Alignment: String, Codable, Sendable, CaseIterable {
         case left
@@ -34,10 +35,47 @@ struct TextStyle: Codable, Sendable, Equatable {
         var blur: Double = 6
     }
 
-    /// Toggleable solid color — used for the text box background and border.
+    /// Toggleable solid color — used for the text box background.
     struct Fill: Codable, Sendable, Equatable {
         var enabled: Bool = false
         var color: RGBA = RGBA()
+    }
+
+    struct Stroke: Codable, Sendable, Equatable {
+        static let defaultWidth: Double = 3
+        static let widthRange: ClosedRange<Double> = 0...20
+
+        var enabled: Bool = false
+        var color: RGBA = RGBA(r: 0, g: 0, b: 0, a: 1)
+        /// Percentage of the rendered font point size, matching Core Text.
+        var width: Double = Stroke.defaultWidth
+
+        private enum CodingKeys: String, CodingKey {
+            case enabled, color, width
+        }
+
+        init(
+            enabled: Bool = false,
+            color: RGBA = RGBA(r: 0, g: 0, b: 0, a: 1),
+            width: Double = Stroke.defaultWidth
+        ) {
+            self.enabled = enabled
+            self.color = color
+            self.width = width
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            self.init(
+                enabled: (try? c.decode(Bool.self, forKey: .enabled)) ?? false,
+                color: (try? c.decode(RGBA.self, forKey: .color)) ?? RGBA(r: 0, g: 0, b: 0, a: 1),
+                width: (try? c.decode(Double.self, forKey: .width)) ?? Stroke.defaultWidth
+            )
+        }
+
+        var clampedWidth: Double {
+            min(max(width, Stroke.widthRange.lowerBound), Stroke.widthRange.upperBound)
+        }
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -57,7 +95,7 @@ extension TextStyle {
             alignment: (try? c.decode(Alignment.self, forKey: .alignment)) ?? .center,
             shadow: (try? c.decode(Shadow.self, forKey: .shadow)) ?? Shadow(),
             background: (try? c.decode(Fill.self, forKey: .background)) ?? Fill(enabled: false, color: RGBA(r: 0, g: 0, b: 0, a: 0.6)),
-            border: (try? c.decode(Fill.self, forKey: .border)) ?? Fill(enabled: false, color: RGBA(r: 0, g: 0, b: 0, a: 1))
+            border: (try? c.decode(Stroke.self, forKey: .border)) ?? Stroke()
         )
     }
 }
@@ -135,13 +173,26 @@ extension TextStyle {
     }
 
     /// `includeColor: false` for bounding measurement (color doesn't affect size).
-    func attributes(size: CGFloat, includeColor: Bool = true) -> [NSAttributedString.Key: Any] {
+    func attributes(
+        size: CGFloat,
+        includeColor: Bool = true,
+        includeStroke: Bool = true
+    ) -> [NSAttributedString.Key: Any] {
         var attrs: [NSAttributedString.Key: Any] = [
             .font: resolvedFont(size: size),
             .paragraphStyle: paragraphStyle,
         ]
         if includeColor { attrs[.foregroundColor] = nsColor }
+        if includeStroke, border.enabled, border.clampedWidth > 0 {
+            attrs[.strokeColor] = border.color.nsColor
+            attrs[.strokeWidth] = NSNumber(value: -border.clampedWidth)
+        }
         return attrs
+    }
+
+    func strokeInset(fontSize: CGFloat) -> CGFloat {
+        guard border.enabled, border.clampedWidth > 0 else { return 0 }
+        return ceil(fontSize * CGFloat(border.clampedWidth / 100))
     }
 }
 

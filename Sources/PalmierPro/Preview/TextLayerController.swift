@@ -16,7 +16,7 @@ final class TextLayerController {
 
     private var clips: [Clip] = []
     private var videoRect: CGRect = .zero
-    private var layersByID: [String: CATextLayer] = [:]
+    private var layersByID: [String: TextClipLayer] = [:]
     private var currentFrame = 0
 
     // Materialize layers slightly early so playback never hitches on typesetting.
@@ -45,13 +45,13 @@ final class TextLayerController {
                   currentFrame < clip.endFrame else { continue }
             needed.insert(clip.id)
 
-            let layer: CATextLayer
+            let layer: TextClipLayer
             if let existing = layersByID[clip.id] {
                 layer = existing
-                if restyle { Self.applyStyle(to: layer, clip: clip, containerSize: videoRect.size) }
+                if restyle { layer.apply(clip: clip, containerSize: videoRect.size) }
             } else {
                 layer = Self.makeTextLayer()
-                Self.applyStyle(to: layer, clip: clip, containerSize: videoRect.size)
+                layer.apply(clip: clip, containerSize: videoRect.size)
                 layersByID[clip.id] = layer
                 textRoot.addSublayer(layer)
             }
@@ -91,9 +91,9 @@ final class TextLayerController {
         let totalSeconds = max(0.001, Double(max(1, timeline.totalFrames)) / fpsD)
         for clip in visibleTextClips(in: timeline) {
             let layer = makeTextLayer()
-            applyStyle(to: layer, clip: clip, containerSize: renderSize)
+            layer.apply(clip: clip, containerSize: renderSize)
             applyOpacityAnimation(to: layer, clip: clip, fps: fps, totalSeconds: totalSeconds)
-            layer.displayIfNeeded()
+            layer.displayContentIfNeeded()
             parent.addSublayer(layer)
         }
         return (parent, videoLayer)
@@ -109,7 +109,7 @@ final class TextLayerController {
         host.isGeometryFlipped = true
         for clip in visibleTextClips(in: timeline) {
             let layer = makeTextLayer()
-            applyStyle(to: layer, clip: clip, containerSize: canvasSize)
+            layer.apply(clip: clip, containerSize: canvasSize)
             let visible = frame >= clip.startFrame && frame < clip.endFrame
             layer.opacity = visible ? Float(clip.opacityAt(frame: frame)) : 0
             host.addSublayer(layer)
@@ -129,67 +129,13 @@ final class TextLayerController {
         return result
     }
 
-    private static func makeTextLayer() -> CATextLayer {
-        let layer = CATextLayer()
-        layer.contentsScale = NSScreen.main?.backingScaleFactor ?? 2.0
-        layer.isWrapped = true
-        layer.truncationMode = .none
-        layer.allowsFontSubpixelQuantization = true
-        // NSNull suppresses CATextLayer's implicit per-property cross-fade.
-        layer.actions = [
-            "contents": NSNull(),
-            "bounds": NSNull(),
-            "position": NSNull(),
-            "opacity": NSNull(),
-            "transform": NSNull(),
-            "string": NSNull(),
-        ]
-        return layer
-    }
-
-    private static let referenceCanvasHeight: CGFloat = 1080
-
-    private static func applyStyle(to layer: CATextLayer, clip: Clip, containerSize: CGSize) {
-        let style = clip.textStyle ?? TextStyle()
-        let content = clip.textContent ?? ""
-        let scale = containerSize.height / referenceCanvasHeight
-
-        let tl = clip.transform.topLeft
-        layer.frame = CGRect(
-            x: tl.x * containerSize.width,
-            y: tl.y * containerSize.height,
-            width: clip.transform.width * containerSize.width,
-            height: clip.transform.height * containerSize.height
-        )
-
-        let fontSize = CGFloat(style.fontSize * style.fontScale) * scale
-        layer.string = NSAttributedString(
-            string: content,
-            attributes: style.attributes(size: fontSize)
-        )
-        layer.alignmentMode = style.alignment.caTextAlignmentMode
-
-        layer.backgroundColor = style.background.enabled ? style.background.color.nsColor.cgColor : nil
-        layer.borderColor = style.border.enabled ? style.border.color.nsColor.cgColor : nil
-        layer.borderWidth = style.border.enabled ? AppTheme.BorderWidth.thin * scale : 0
-
-        if style.shadow.enabled {
-            layer.shadowColor = style.shadow.color.nsColor.cgColor
-            layer.shadowOpacity = 1
-            layer.shadowOffset = CGSize(
-                width: style.shadow.offsetX * scale,
-                height: style.shadow.offsetY * scale
-            )
-            layer.shadowRadius = max(0, CGFloat(style.shadow.blur) * scale)
-        } else {
-            layer.shadowOpacity = 0
-            layer.shadowRadius = 0
-        }
+    private static func makeTextLayer() -> TextClipLayer {
+        TextClipLayer.make(contentsScale: NSScreen.main?.backingScaleFactor ?? 2.0)
     }
 
     /// Export-time opacity
     private static func applyOpacityAnimation(
-        to layer: CATextLayer,
+        to layer: CALayer,
         clip: Clip,
         fps: Int,
         totalSeconds: Double

@@ -189,6 +189,14 @@ Use this for simple white-background removal. Start with `threshold: 0.85` and `
 - Persistence: text clips store `TextStyle.fontName` in the project package, so these choices persist on save/reopen.
 - Install caveat: copying only the executable is not enough when fonts change; copy `PalmierPro_PalmierPro.bundle/Fonts` into the app bundle resources and reopen the app.
 
+### Text Stroke
+
+- `TextStyle.border` remains the project JSON key for compatibility, but stores a glyph stroke with enabled, color, and width. Width is a percentage of font size and legacy `{enabled,color}` values default to 3%.
+- Find it in Inspector > Text > Appearance > Stroke. Thickness supports 0–20%; enabling or resizing the stroke refits the text box.
+- Preview, snapshots, and encoded video exports share `TextClipLayer`, which draws a negative Core Text stroke width for filled, outlined glyphs and reserves an inset to avoid clipping.
+- Agent/MCP text tools do not expose stroke yet. FCPXML exports do not transport this custom style; export rendered video when the outline must be preserved.
+- `TextStrokeTests` covers legacy decoding, JSON round-trip, Core Text attributes, layout padding, and rasterized fill/stroke pixels.
+
 ## Feature Checklist
 
 Before calling a feature complete:

@@ -78,13 +78,15 @@ struct TextLayerOpacityAnimationTests {
         // Timeline is exactly the clip length here so no post-clip frames.
     }
 
-    @Test func appliesBorderStyleToTextLayer() {
+    @Test func appliesGlyphStrokeWithoutLayerBorder() {
         var clip = textClip(start: 0, duration: 30)
         var style = TextStyle()
         style.border.enabled = true
         clip.textStyle = style
         let (_, layer) = animation(for: clip)
-        #expect(layer?.borderColor != nil)
-        #expect(layer?.borderWidth == AppTheme.BorderWidth.thin)
+        let textLayer = layer as? TextClipLayer
+        #expect(layer?.borderColor == nil)
+        #expect(layer?.borderWidth == 0)
+        #expect(textLayer?.glyphs.contents != nil)
     }
 }
