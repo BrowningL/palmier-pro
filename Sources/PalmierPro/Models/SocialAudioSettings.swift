@@ -15,17 +15,32 @@ enum SocialAudioRole: String, Codable, Sendable, Equatable, CaseIterable {
 enum SocialAudioPreset: String, Codable, Sendable, Equatable, CaseIterable {
     case balanced
     case clearVoice
+    case fixedLevel
 
     var displayName: String {
         switch self {
-        case .balanced: "Balanced"
-        case .clearVoice: "Clear Voice"
+        case .balanced: "Balanced (Ducking)"
+        case .clearVoice: "Clear Voice (Ducking)"
+        case .fixedLevel: "Fixed Level (No Ducking)"
         }
     }
 
     var voiceTargetLUFS: Double { -16 }
-    var musicTargetLUFS: Double { self == .balanced ? -18 : -20 }
-    var musicDuckDb: Double { self == .balanced ? 14 : 18 }
+    var musicTargetLUFS: Double {
+        switch self {
+        case .balanced: -18
+        case .clearVoice: -20
+        case .fixedLevel: -30
+        }
+    }
+    var musicDuckDb: Double {
+        switch self {
+        case .balanced: 14
+        case .clearVoice: 18
+        case .fixedLevel: 0
+        }
+    }
+    var usesSpeechDucking: Bool { musicDuckDb > 0 }
     var voicePeakCeilingDbFS: Double { -3 }
     var musicPeakCeilingDbFS: Double { -5 }
 }

@@ -63,6 +63,7 @@ extension InspectorView {
         let roles = Set(explicitRoles)
         let role = roles.count == 1 && explicitRoles.count == audios.count ? roles.first : nil
         let singleSettings = audios.count == 1 ? audios.first?.socialAudio : nil
+        let usesSpeechDucking = editor.socialAudioPreset.usesSpeechDucking
 
         VStack(alignment: .leading, spacing: AppTheme.Spacing.smMd) {
             HStack {
@@ -146,7 +147,9 @@ extension InspectorView {
             .buttonStyle(.bordered)
             .controlSize(.small)
             .disabled(editor.isSocialAudioMixing)
-            .help("Measure the cleaned voice, normalize it, then duck music during speech")
+            .help(usesSpeechDucking
+                ? "Measure the cleaned voice, normalize it, then duck music during speech"
+                : "Measure and normalize the cleaned voice and music to steady levels without ducking")
 
             if let settings = singleSettings {
                 Text(socialAudioResult(settings))
@@ -160,7 +163,9 @@ extension InspectorView {
                     .foregroundStyle(AppTheme.Text.mutedColor)
                     .fixedSize(horizontal: false, vertical: true)
             } else {
-                Text("Voice Cleanup → −16 LUFS voice → speech-aware music ducking")
+                Text(usesSpeechDucking
+                    ? "Voice Cleanup → −16 LUFS voice → speech-aware music ducking"
+                    : "Voice Cleanup → −16 LUFS voice → steady −30 LUFS music (no ducking)")
                     .font(.system(size: AppTheme.FontSize.xs))
                     .foregroundStyle(AppTheme.Text.mutedColor)
             }

@@ -75,9 +75,10 @@ pgrep -fl 'PalmierPro|palmier' || true
 
 ## Social Audio Mix
 
-- Find it in Inspector > Audio > Social Audio Mix. The repeatable stack is Voice Cleanup first, then Social Audio Mix normalization, then speech-aware music ducking; authored volume/fades remain the final manual layer.
+- Find it in Inspector > Audio > Social Audio Mix. The repeatable stack is Voice Cleanup first, then Social Audio Mix normalization and the selected music behavior; authored volume/fades remain the final manual layer.
 - `Clip.socialAudio` persists the voice/music role, preset, measured loudness/sample peak, automatic gain, source-time speech activity, and music duck amount. Old projects decode with no social-audio recipe.
-- Balanced targets voice at -16 LUFS and music at -18 LUFS with 14 dB speech ducking; Clear Voice uses -16/-20 LUFS with 18 dB ducking. Conservative sample-peak headroom limits gain without adding a latency-producing live limiter.
+- Balanced (Ducking) targets voice at -16 LUFS and music at -18 LUFS with 14 dB speech ducking; Clear Voice (Ducking) uses -16/-20 LUFS with 18 dB ducking. Fixed Level (No Ducking) targets -16/-30 LUFS and keeps the normalized music gain steady through spoken sections. Conservative sample-peak headroom limits gain without adding a latency-producing live limiter.
+- Fixed Level provides a repeatable measured starting balance, not a guaranteed perceptual mix. Arrangement density, frequency masking, recording quality, and phone speakers can still justify a final authored volume adjustment by ear.
 - Add Music imports a local audio file to a dedicated track and runs the same whole-project balance pass. The selected preset is remembered for future projects.
 - Analysis streams 48 kHz Float32 PCM, bounds hardware decoder concurrency to two jobs, and uses the cleaned proxy when Voice Cleanup is enabled. Preview and export consume persisted `AVAudioMix` gain ramps only, so the feature does not change clip timing or A/V sync.
 - Tests live in `Tests/PalmierProTests/Audio/AudioLoudnessAnalyzerTests.swift`, `SocialAudioDuckingTests.swift`, `SocialAudioSettingsTests.swift`, and `SocialAudioCompositionTests.swift`.

@@ -4,6 +4,24 @@ import Testing
 
 @Suite("Social audio settings")
 struct SocialAudioSettingsTests {
+    @Test func presetsDeclareTheirMusicBalanceBehavior() {
+        #expect(SocialAudioPreset.balanced.displayName == "Balanced (Ducking)")
+        #expect(SocialAudioPreset.balanced.musicTargetLUFS == -18)
+        #expect(SocialAudioPreset.balanced.musicDuckDb == 14)
+        #expect(SocialAudioPreset.balanced.usesSpeechDucking)
+
+        #expect(SocialAudioPreset.clearVoice.displayName == "Clear Voice (Ducking)")
+        #expect(SocialAudioPreset.clearVoice.musicTargetLUFS == -20)
+        #expect(SocialAudioPreset.clearVoice.musicDuckDb == 18)
+        #expect(SocialAudioPreset.clearVoice.usesSpeechDucking)
+
+        #expect(SocialAudioPreset.fixedLevel.displayName == "Fixed Level (No Ducking)")
+        #expect(SocialAudioPreset.fixedLevel.voiceTargetLUFS == -16)
+        #expect(SocialAudioPreset.fixedLevel.musicTargetLUFS == -30)
+        #expect(SocialAudioPreset.fixedLevel.musicDuckDb == 0)
+        #expect(!SocialAudioPreset.fixedLevel.usesSpeechDucking)
+    }
+
     @Test func normalizationTargetsLoudnessAndCapsPeakAndBoost() {
         #expect(SocialAudioSettings.normalizationGainDb(
             measuredLUFS: -22,
@@ -51,5 +69,22 @@ struct SocialAudioSettingsTests {
         {"mediaRef":"legacy","mediaType":"audio","startFrame":0,"durationFrames":30}
         """
         #expect(try JSONDecoder().decode(Clip.self, from: Data(legacy.utf8)).socialAudio == nil)
+    }
+
+    @Test func fixedLevelRecipeRoundTrips() throws {
+        let settings = SocialAudioSettings(
+            role: .music,
+            preset: .fixedLevel,
+            measuredLoudnessLUFS: -13,
+            measuredPeakDbFS: -1,
+            normalizationGainDb: -17,
+            duckingAmountDb: SocialAudioPreset.fixedLevel.musicDuckDb
+        )
+
+        let decoded = try JSONDecoder().decode(
+            SocialAudioSettings.self,
+            from: JSONEncoder().encode(settings)
+        )
+        #expect(decoded == settings)
     }
 }

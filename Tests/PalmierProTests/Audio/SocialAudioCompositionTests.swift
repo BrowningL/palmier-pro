@@ -64,6 +64,54 @@ struct SocialAudioCompositionTests {
         #expect(abs(afterRelease.end - 0.5) < 0.000_1)
     }
 
+    @Test func fixedLevelMusicStaysConstantAcrossDetectedVoice() throws {
+        let fps = 30
+        let preset = SocialAudioPreset.fixedLevel
+        var voice = Fixtures.clip(id: "voice", mediaRef: "v", mediaType: .audio, start: 0, duration: 90)
+        voice.socialAudio = SocialAudioSettings(
+            role: .voice,
+            preset: preset,
+            speechActivity: [.init(startSeconds: 1, endSeconds: 2)]
+        )
+        var music = Fixtures.clip(id: "music", mediaRef: "m", mediaType: .audio, start: 0, duration: 90)
+        music.socialAudio = SocialAudioSettings(
+            role: .music,
+            preset: preset,
+            normalizationGainDb: -6.020599913279624,
+            duckingAmountDb: preset.musicDuckDb
+        )
+        let timeline = Fixtures.timeline(fps: fps, tracks: [
+            Fixtures.audioTrack(clips: [voice]),
+            Fixtures.audioTrack(clips: [music]),
+        ])
+
+        let composition = AVMutableComposition()
+        let voiceTrack = try #require(composition.addMutableTrack(
+            withMediaType: .audio,
+            preferredTrackID: kCMPersistentTrackID_Invalid
+        ))
+        let musicTrack = try #require(composition.addMutableTrack(
+            withMediaType: .audio,
+            preferredTrackID: kCMPersistentTrackID_Invalid
+        ))
+        let mix = CompositionBuilder.buildVisuals(
+            timeline: timeline,
+            trackMappings: [
+                mapping(track: voiceTrack, trackIndex: 0, clipId: voice.id),
+                mapping(track: musicTrack, trackIndex: 1, clipId: music.id),
+            ],
+            compositionDuration: CMTime(value: 90, timescale: 30),
+            renderSize: CGSize(width: 1080, height: 1920)
+        ).audioMix
+        let params = try #require(mix.inputParameters.first { $0.trackID == musicTrack.trackID })
+
+        for frame in [10, 45, 80] {
+            let ramp = try #require(volumeRamp(params, atFrame: frame, fps: fps))
+            #expect(abs(ramp.start - 0.5) < 0.000_1)
+            #expect(abs(ramp.end - 0.5) < 0.000_1)
+        }
+    }
+
     @Test func mutedVoiceTrackDoesNotDuckMusic() throws {
         var voice = Fixtures.clip(id: "voice", mediaRef: "v", mediaType: .audio, start: 0, duration: 60)
         voice.socialAudio = SocialAudioSettings(
