@@ -80,6 +80,15 @@ final class EditorViewModel {
     var showGenerationPanel: Bool = false {
         didSet { if showGenerationPanel && !oldValue { showMediaPanelMediaTab() } }
     }
+    var isSocialAudioMixing = false
+    var socialAudioMixMessage: String?
+    var socialAudioPreset: SocialAudioPreset = {
+        guard let raw = UserDefaults.standard.string(forKey: "socialAudioPreset"),
+              let preset = SocialAudioPreset(rawValue: raw) else { return .balanced }
+        return preset
+    }() {
+        didSet { UserDefaults.standard.set(socialAudioPreset.rawValue, forKey: "socialAudioPreset") }
+    }
     /// AIEditTab input consumed by GenerationView.
     var pendingPanelSeed: PendingPanelSeed?
     var pendingEditReplacementClipId: String?
