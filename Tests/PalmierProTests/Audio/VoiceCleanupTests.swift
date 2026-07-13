@@ -21,7 +21,7 @@ struct VoiceCleanupTests {
         #expect(legacyClip.voiceCleanup == nil)
     }
 
-    @Test func offlineRenderPreservesLengthAndAlignmentAtZeroStrength() throws {
+    @Test func offlineRenderPreservesLengthAndAlignmentAtZeroStrength() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("pp-voice-cleanup-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -33,7 +33,7 @@ struct VoiceCleanupTests {
         let frameCount = 48_000
         try writeSignal(to: sourceURL, sampleRate: sampleRate, frameCount: frameCount)
 
-        try VoiceCleanupRenderer.render(
+        try await VoiceCleanupRenderer.render(
             sourceURL: sourceURL,
             destinationURL: outputURL,
             strength: 0
@@ -51,6 +51,69 @@ struct VoiceCleanupTests {
             (maximum?.delta ?? .infinity) < 0.000_01,
             "latency-compensated dry render changed \(changed.count) samples; max=\(String(describing: maximum)) range=\(changed.first?.index ?? -1)...\(changed.last?.index ?? -1)"
         )
+    }
+
+    @Test func encodedMoviePrimingDoesNotShiftCleanedAudio() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("pp-voice-priming-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let sourceURL = root.appendingPathComponent("source.mov")
+        let outputURL = root.appendingPathComponent("clean.caf")
+        let sampleRate = 44_100.0
+        try await writeAACMovieWithPriming(to: sourceURL, sampleRate: sampleRate)
+
+        let asset = AVURLAsset(url: sourceURL)
+        let track = try #require(try await asset.loadTracks(withMediaType: .audio).first)
+        let timeRange = try await track.load(.timeRange)
+        let presentedFrames = CMTimeConvertScale(
+            timeRange.duration,
+            timescale: CMTimeScale(sampleRate),
+            method: .default
+        ).value
+        let containerDecode = try AVAudioFile(forReading: sourceURL)
+        #expect(containerDecode.length > presentedFrames, "fixture must expose AAC priming")
+        let reference = try await readPresentedSamples(from: sourceURL, sampleRate: sampleRate)
+        #expect(reference.count == Int(presentedFrames))
+
+        try await VoiceCleanupRenderer.render(
+            sourceURL: sourceURL,
+            destinationURL: outputURL,
+            strength: 0
+        )
+
+        let output = try AVAudioFile(forReading: outputURL)
+        #expect(output.length == presentedFrames)
+        let outputSamples = try readSamples(from: outputURL)
+        let referencePeak = try #require(reference.indices.max {
+            abs(reference[$0]) < abs(reference[$1])
+        })
+        let outputPeak = try #require(outputSamples.indices.max {
+            abs(outputSamples[$0]) < abs(outputSamples[$1])
+        })
+        #expect(abs(referencePeak - outputPeak) <= 1)
+    }
+
+    @Test func cacheStrengthUsesDisplayedPercentageResolution() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("pp-voice-strength-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let sourceURL = root.appendingPathComponent("source.caf")
+        try writeSignal(to: sourceURL, sampleRate: 48_000, frameCount: 4_800)
+        let first = try await VoiceCleanupCache.shared.processedURL(
+            sourceURL: sourceURL,
+            strength: 0.734
+        )
+        let second = try await VoiceCleanupCache.shared.processedURL(
+            sourceURL: sourceURL,
+            strength: 0.73
+        )
+        defer { try? FileManager.default.removeItem(at: first) }
+
+        #expect(first == second)
     }
 
     @Test func compositionUsesCleanedAudioProxy() async throws {
@@ -161,6 +224,91 @@ struct VoiceCleanupTests {
         }
         samples[min(10_000, frameCount - 1)] = 0.9
         try file.write(from: buffer)
+    }
+
+    /// AVAssetWriter creates the same AAC priming + QuickTime edit-list shape as
+    /// iPhone recordings, so this fixture catches presentation-timeline regressions.
+    private func writeAACMovieWithPriming(to url: URL, sampleRate: Double) async throws {
+        let pcmURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("pp-voice-aac-input-\(UUID().uuidString).caf")
+        defer { try? FileManager.default.removeItem(at: pcmURL) }
+        try writeSignal(to: pcmURL, sampleRate: sampleRate, frameCount: Int(sampleRate) + 137)
+
+        let sourceAsset = AVURLAsset(url: pcmURL)
+        guard let sourceTrack = try await sourceAsset.loadTracks(withMediaType: .audio).first else {
+            throw NSError(domain: "VoiceCleanupTests", code: 20)
+        }
+        let reader = try AVAssetReader(asset: sourceAsset)
+        let readerOutput = AVAssetReaderTrackOutput(track: sourceTrack, outputSettings: nil)
+        guard reader.canAdd(readerOutput) else {
+            throw NSError(domain: "VoiceCleanupTests", code: 21)
+        }
+        reader.add(readerOutput)
+
+        let writer = try AVAssetWriter(outputURL: url, fileType: .mov)
+        let writerInput = AVAssetWriterInput(mediaType: .audio, outputSettings: [
+            AVFormatIDKey: kAudioFormatMPEG4AAC,
+            AVSampleRateKey: sampleRate,
+            AVNumberOfChannelsKey: 1,
+            AVEncoderBitRateKey: 96_000,
+        ])
+        writerInput.expectsMediaDataInRealTime = false
+        guard writer.canAdd(writerInput) else {
+            throw NSError(domain: "VoiceCleanupTests", code: 22)
+        }
+        writer.add(writerInput)
+
+        guard reader.startReading() else {
+            throw reader.error ?? NSError(domain: "VoiceCleanupTests", code: 23)
+        }
+        guard writer.startWriting() else {
+            throw writer.error ?? NSError(domain: "VoiceCleanupTests", code: 24)
+        }
+        writer.startSession(atSourceTime: .zero)
+        while reader.status == .reading {
+            try Task.checkCancellation()
+            guard writer.status == .writing else {
+                throw writer.error ?? NSError(domain: "VoiceCleanupTests", code: 27)
+            }
+            if writerInput.isReadyForMoreMediaData {
+                guard let sample = readerOutput.copyNextSampleBuffer() else { break }
+                guard writerInput.append(sample) else {
+                    throw writer.error ?? NSError(domain: "VoiceCleanupTests", code: 25)
+                }
+            } else {
+                await Task.yield()
+            }
+        }
+        guard reader.status == .completed else {
+            throw reader.error ?? NSError(domain: "VoiceCleanupTests", code: 28)
+        }
+        writerInput.markAsFinished()
+        await writer.finishWriting()
+        guard writer.status == .completed else {
+            throw writer.error ?? NSError(domain: "VoiceCleanupTests", code: 26)
+        }
+    }
+
+    private func readPresentedSamples(from url: URL, sampleRate: Double) async throws -> [Float] {
+        var samples: [Float] = []
+        try await AudioTrackReader.read(from: url, outputSettings: [
+            AVFormatIDKey: kAudioFormatLinearPCM,
+            AVSampleRateKey: sampleRate,
+            AVNumberOfChannelsKey: 1,
+            AVLinearPCMBitDepthKey: 32,
+            AVLinearPCMIsFloatKey: true,
+            AVLinearPCMIsBigEndianKey: false,
+            AVLinearPCMIsNonInterleaved: false,
+        ]) { buffer in
+            guard let channel = buffer.floatChannelData?[0] else {
+                throw NSError(domain: "VoiceCleanupTests", code: 29)
+            }
+            samples.append(contentsOf: UnsafeBufferPointer(
+                start: channel,
+                count: Int(buffer.frameLength)
+            ))
+        }
+        return samples
     }
 
     private func readSamples(from url: URL) throws -> [Float] {

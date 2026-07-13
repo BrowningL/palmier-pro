@@ -10,10 +10,10 @@ actor VoiceCleanupCache {
     private var inFlight: [String: Task<URL, Error>] = [:]
 
     func processedURL(sourceURL: URL, strength: Double) async throws -> URL {
-        let normalizedStrength = VoiceCleanupSettings(strength: strength).normalizedStrength
-        guard normalizedStrength > 0 else { return sourceURL }
+        let renderStrength = Self.renderStrength(strength)
+        guard renderStrength > 0 else { return sourceURL }
 
-        let key = try Self.cacheKey(sourceURL: sourceURL, strength: strength)
+        let key = try Self.cacheKey(sourceURL: sourceURL, strength: renderStrength)
         let destination = try Self.cacheDirectory()
             .appendingPathComponent(key)
             .appendingPathExtension("caf")
@@ -27,10 +27,10 @@ actor VoiceCleanupCache {
         let task = Task.detached(priority: .userInitiated) {
             try await Self.renderGate.wait()
             defer { Task { await Self.renderGate.signal() } }
-            return try VoiceCleanupRenderer.render(
+            return try await VoiceCleanupRenderer.render(
                 sourceURL: sourceURL,
                 destinationURL: destination,
-                strength: strength
+                strength: renderStrength
             )
         }
         inFlight[key] = task
@@ -48,15 +48,21 @@ actor VoiceCleanupCache {
         let values = try sourceURL.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
         let size = values.fileSize ?? 0
         let modified = values.contentModificationDate?.timeIntervalSince1970 ?? 0
-        let normalizedStrength = VoiceCleanupSettings(strength: strength).normalizedStrength
         let fingerprint = [
-            "voice-cleanup-v1",
+            "voice-cleanup-v2",
             sourceURL.standardizedFileURL.path,
             String(size),
             String(format: "%.6f", modified),
-            String(normalizedStrength.bitPattern, radix: 16),
+            String(strength.bitPattern, radix: 16),
         ].joined(separator: "|")
         return SHA256.hash(data: Data(fingerprint.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// The inspector displays whole percentages. Matching that resolution avoids
+    /// rendering multiple whole-file proxies for imperceptibly different drag values.
+    private static func renderStrength(_ strength: Double) -> Double {
+        let normalized = VoiceCleanupSettings(strength: strength).normalizedStrength
+        return (normalized * 100).rounded(.toNearestOrEven) / 100
     }
 
     private static func cacheDirectory() throws -> URL {
@@ -81,6 +87,7 @@ enum VoiceCleanupRenderer {
         case audioUnitSetup(OSStatus)
         case bufferAllocation
         case renderFailed
+        case presentationMismatch(expected: AVAudioFramePosition, actual: AVAudioFramePosition)
         case incompleteRender(expected: AVAudioFramePosition, actual: AVAudioFramePosition)
 
         var errorDescription: String? {
@@ -93,6 +100,8 @@ enum VoiceCleanupRenderer {
                 "Voice isolation could not allocate audio buffers."
             case .renderFailed:
                 "Voice isolation stopped while rendering."
+            case .presentationMismatch(let expected, let actual):
+                "The source presented \(actual) of \(expected) expected audio samples."
             case .incompleteRender(let expected, let actual):
                 "Voice isolation rendered \(actual) of \(expected) samples."
             }
@@ -103,9 +112,21 @@ enum VoiceCleanupRenderer {
     private static let warmupSeconds = 0.25
 
     @discardableResult
-    static func render(sourceURL: URL, destinationURL: URL, strength: Double) throws -> URL {
+    static func render(sourceURL: URL, destinationURL: URL, strength: Double) async throws -> URL {
         let started = ContinuousClock.now
-        let source = try AVAudioFile(forReading: sourceURL)
+        var source = try AVAudioFile(forReading: sourceURL)
+        let alignedSourceURL = try await presentationAlignedSourceIfNeeded(
+            sourceURL: sourceURL,
+            decodedFile: source
+        )
+        defer {
+            if let alignedSourceURL {
+                try? FileManager.default.removeItem(at: alignedSourceURL)
+            }
+        }
+        if let alignedSourceURL {
+            source = try AVAudioFile(forReading: alignedSourceURL)
+        }
         let sourceFormat = source.processingFormat
         guard source.length > 0, sourceFormat.sampleRate > 0, sourceFormat.channelCount > 0,
               let format = AVAudioFormat(
@@ -168,20 +189,13 @@ enum VoiceCleanupRenderer {
             flushChannels[channel].initialize(repeating: 0, count: Int(flushFramePosition))
         }
 
-        player.scheduleSegment(
-            source,
-            startingFrame: 0,
-            frameCount: AVAudioFrameCount(sourceFrames),
-            at: AVAudioTime(sampleTime: warmupFrames, atRate: format.sampleRate)
-        )
-        // Keep the input node alive beyond EOF so Sound Isolation can flush its
-        // lookahead instead of replacing the final speech samples with silence.
-        player.scheduleBuffer(
-            flushBuffer,
-            at: AVAudioTime(
-                sampleTime: warmupFrames + sourceFrames,
-                atRate: format.sampleRate
-            )
+        scheduleInput(
+            player: player,
+            source: source,
+            sourceFrames: sourceFrames,
+            flushBuffer: flushBuffer,
+            warmupFrames: warmupFrames,
+            sampleRate: format.sampleRate
         )
 
         let skipFrames = warmupFrames + latencyFrames
@@ -262,6 +276,104 @@ enum VoiceCleanupRenderer {
                 + "elapsed=\(elapsed)"
         )
         return destinationURL
+    }
+
+    /// Keep scheduling synchronous: awaiting the convenience overload would wait
+    /// for playback completion before the manual render loop has started.
+    private static func scheduleInput(
+        player: AVAudioPlayerNode,
+        source: AVAudioFile,
+        sourceFrames: AVAudioFramePosition,
+        flushBuffer: AVAudioPCMBuffer,
+        warmupFrames: AVAudioFramePosition,
+        sampleRate: Double
+    ) {
+        player.scheduleSegment(
+            source,
+            startingFrame: 0,
+            frameCount: AVAudioFrameCount(sourceFrames),
+            at: AVAudioTime(sampleTime: warmupFrames, atRate: sampleRate)
+        )
+        // Keep the input node alive beyond EOF so Sound Isolation can flush its
+        // lookahead instead of replacing the final speech samples with silence.
+        player.scheduleBuffer(
+            flushBuffer,
+            at: AVAudioTime(
+                sampleTime: warmupFrames + sourceFrames,
+                atRate: sampleRate
+            )
+        )
+    }
+
+    /// `AVAudioFile` normally removes codec priming, but some QuickTime edit lists
+    /// are exposed as extra decoded frames. In that case AVAssetReader is the source
+    /// of truth because it follows the track's presentation timeline.
+    private static func presentationAlignedSourceIfNeeded(
+        sourceURL: URL,
+        decodedFile: AVAudioFile
+    ) async throws -> URL? {
+        let asset = AVURLAsset(url: sourceURL)
+        guard let track = try await asset.loadTracks(withMediaType: .audio).first else {
+            throw RenderError.invalidSource
+        }
+        let timeRange = try await track.load(.timeRange)
+        let sampleRate = decodedFile.processingFormat.sampleRate
+        guard sampleRate > 0, sampleRate <= Double(Int32.max), timeRange.duration.isNumeric else {
+            throw RenderError.invalidSource
+        }
+
+        let presentedDuration = CMTimeConvertScale(
+            timeRange.duration,
+            timescale: CMTimeScale(sampleRate.rounded()),
+            method: .default
+        )
+        let presentedFrames = AVAudioFramePosition(presentedDuration.value)
+        guard presentedFrames > 0 else { throw RenderError.invalidSource }
+        guard abs(decodedFile.length - presentedFrames) > 1 else { return nil }
+
+        let temporaryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("palmier-voice-source-\(UUID().uuidString).caf")
+        var output: AVAudioFile?
+        do {
+            try await AudioTrackReader.read(from: sourceURL, outputSettings: [
+                AVFormatIDKey: kAudioFormatLinearPCM,
+                AVSampleRateKey: sampleRate,
+                AVNumberOfChannelsKey: Int(decodedFile.processingFormat.channelCount),
+                AVLinearPCMBitDepthKey: 32,
+                AVLinearPCMIsFloatKey: true,
+                AVLinearPCMIsBigEndianKey: false,
+                AVLinearPCMIsNonInterleaved: false,
+            ]) { buffer in
+                try Task.checkCancellation()
+                if output == nil {
+                    output = try AVAudioFile(
+                        forWriting: temporaryURL,
+                        settings: buffer.format.settings,
+                        commonFormat: buffer.format.commonFormat,
+                        interleaved: buffer.format.isInterleaved
+                    )
+                }
+                try output?.write(from: buffer)
+            }
+            output = nil
+            let alignedFile = try AVAudioFile(forReading: temporaryURL)
+            guard alignedFile.length > 0 else { throw RenderError.invalidSource }
+            guard abs(alignedFile.length - presentedFrames) <= 1 else {
+                throw RenderError.presentationMismatch(
+                    expected: presentedFrames,
+                    actual: alignedFile.length
+                )
+            }
+            Log.preview.info(
+                "voice cleanup normalized presentation file=\(sourceURL.lastPathComponent) "
+                    + "decodedFrames=\(decodedFile.length) presentedFrames=\(alignedFile.length)"
+            )
+            return temporaryURL
+        } catch {
+            output = nil
+            try? FileManager.default.removeItem(at: temporaryURL)
+            throw error
+        }
     }
 
     private static func setParameter(

@@ -15,10 +15,18 @@ extension EditorViewModel {
 
     func applyVoiceCleanupStrength(clipIds: [String], strength: Double) {
         let settings = VoiceCleanupSettings(strength: strength)
-        applyClipProperties(clipIds: clipIds, rebuild: false) { clip in
-            guard clip.mediaType == .audio else { return }
+        for clipId in clipIds {
+            guard let location = findClip(id: clipId) else { continue }
+            var clip = timeline.tracks[location.trackIndex].clips[location.clipIndex]
+            guard clip.mediaType == .audio else { continue }
+            if dragBefore[clipId] == nil {
+                dragBefore[clipId] = clip
+            }
             clip.voiceCleanup = settings
+            timeline.tracks[location.trackIndex].clips[location.clipIndex] = clip
         }
+        // The proxy only changes on commit, so refreshing the video compositor on
+        // every drag event wastes GPU work without changing the audible preview.
     }
 
     func commitVoiceCleanupStrength(clipIds: [String], strength: Double) {
