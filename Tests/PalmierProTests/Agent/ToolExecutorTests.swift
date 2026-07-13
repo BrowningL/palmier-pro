@@ -1181,6 +1181,57 @@ struct ToolExecutorClipTests {
         #expect(ToolHarness.textOf(result).contains("text"))
     }
 
+    @Test func setClipPropertiesAppliesInstagramPresetAndStrokeToText() async throws {
+        let h = ToolHarness()
+        let addResult = await h.runRaw("add_texts", args: [
+            "entries": [[
+                "startFrame": 0,
+                "durationFrames": 60,
+                "content": "Caption",
+            ]]
+        ])
+        #expect(addResult.isError == false, "\(ToolHarness.textOf(addResult))")
+        let clipId = try #require(h.editor.timeline.tracks.first?.clips.first?.id)
+
+        let result = await h.runRaw("set_clip_properties", args: [
+            "clipIds": [clipId],
+            "textPreset": "instagramDark",
+            "strokeColor": "#00FF00",
+            "strokeWidth": 8.0,
+        ])
+
+        #expect(result.isError == false, "\(ToolHarness.textOf(result))")
+        let clip = try #require(h.editor.clipFor(id: clipId))
+        let style = try #require(clip.textStyle)
+        #expect(style.fontName == TextStyle.systemBoldFontName)
+        #expect(style.lineHeightMultiple == TextStyle.instagramLineHeightMultiple)
+        #expect(style.color == TextStyle.RGBA())
+        #expect(style.background.enabled)
+        #expect(style.background.color == TextStyle.RGBA(r: 0, g: 0, b: 0, a: 1))
+        #expect(style.shadow.enabled == false)
+        #expect(style.border.enabled)
+        #expect(style.border.color == TextStyle.RGBA(r: 0, g: 1, b: 0, a: 1))
+        #expect(style.border.width == 8)
+    }
+
+    @Test func setClipPropertiesRejectsInstagramPresetAndStrokeOnVideo() async throws {
+        let (h, asset) = await setupWithVideoTrack()
+        let clipId = await addedClip(in: h, asset: asset)
+        let result = await h.runRaw("set_clip_properties", args: [
+            "clipIds": [clipId],
+            "textPreset": "instagramLight",
+            "strokeColor": "#FFFFFF",
+            "strokeWidth": 4.0,
+        ])
+
+        #expect(result.isError)
+        let message = ToolHarness.textOf(result)
+        #expect(message.contains("textPreset"))
+        #expect(message.contains("strokeColor"))
+        #expect(message.contains("strokeWidth"))
+        #expect(h.editor.timeline.tracks[0].clips[0].textStyle == nil)
+    }
+
     @Test func setClipPropertiesRejectsEmptyClipIds() async throws {
         let h = ToolHarness()
         let result = await h.runRaw("set_clip_properties", args: ["clipIds": [], "speed": 2.0])
@@ -1448,6 +1499,69 @@ struct ToolExecutorTextFolderTests {
         ])
         #expect(result.isError == false, "\(ToolHarness.textOf(result))")
         #expect(h.editor.timeline.tracks[0].clips[0].textStyle?.fontName == "Space Grotesk")
+    }
+
+    @Test func addTextsTrackGroupsCreateLayeredTracksAndShareStages() async throws {
+        let h = ToolHarness()
+        let result = await h.runRaw("add_texts", args: [
+            "entries": [
+                ["trackGroup": "first-line", "startFrame": 0, "durationFrames": 30, "content": "Here's"],
+                ["trackGroup": "first-line", "startFrame": 30, "durationFrames": 30, "content": "Here's how"],
+                ["trackGroup": "second-line", "startFrame": 0, "durationFrames": 60, "content": "we built"],
+            ]
+        ])
+
+        #expect(result.isError == false, "\(ToolHarness.textOf(result))")
+        #expect(h.editor.timeline.tracks.count == 2)
+
+        let firstLine = h.editor.timeline.tracks[0]
+        let secondLine = h.editor.timeline.tracks[1]
+        #expect(firstLine.clips.map(\.textContent) == ["Here's", "Here's how"])
+        #expect(firstLine.clips.map(\.startFrame) == [0, 30])
+        #expect(secondLine.clips.map(\.textContent) == ["we built"])
+        #expect(secondLine.clips[0].startFrame == 0)
+        #expect(secondLine.clips[0].durationFrames == 60)
+    }
+
+    @Test func addTextsRejectsMixedTrackGroupUsageWithoutMutatingTimeline() async throws {
+        let h = ToolHarness()
+        let result = await h.runRaw("add_texts", args: [
+            "entries": [
+                ["trackGroup": "first-line", "startFrame": 0, "durationFrames": 30, "content": "One"],
+                ["startFrame": 0, "durationFrames": 30, "content": "Two"],
+            ]
+        ])
+
+        #expect(result.isError)
+        #expect(ToolHarness.textOf(result).contains("Mixed trackGroup"))
+        #expect(h.editor.timeline.tracks.isEmpty)
+    }
+
+    @Test func addTextsAppliesInstagramPresetAndStroke() async throws {
+        let h = ToolHarness()
+        let result = await h.runRaw("add_texts", args: [
+            "entries": [[
+                "startFrame": 0,
+                "durationFrames": 60,
+                "content": "Premium captions",
+                "textPreset": "instagramLight",
+                "strokeColor": "#FF0000",
+                "strokeWidth": 6.0,
+            ]]
+        ])
+
+        #expect(result.isError == false, "\(ToolHarness.textOf(result))")
+        let clip = try #require(h.editor.timeline.tracks.first?.clips.first)
+        let style = try #require(clip.textStyle)
+        #expect(style.fontName == TextStyle.systemBoldFontName)
+        #expect(style.lineHeightMultiple == TextStyle.instagramLineHeightMultiple)
+        #expect(style.color == TextStyle.RGBA(r: 0, g: 0, b: 0, a: 1))
+        #expect(style.background.enabled)
+        #expect(style.background.color == TextStyle.RGBA())
+        #expect(style.shadow.enabled == false)
+        #expect(style.border.enabled)
+        #expect(style.border.color == TextStyle.RGBA(r: 1, g: 0, b: 0, a: 1))
+        #expect(style.border.width == 6)
     }
 
     @Test func addTextsRejectsAudioTargetTrack() async throws {

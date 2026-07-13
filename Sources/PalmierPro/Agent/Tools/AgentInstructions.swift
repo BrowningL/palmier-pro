@@ -67,6 +67,15 @@ enum AgentInstructions {
             tracks through its alpha; use 'exclusion' for a softer version.
             For Creator Connect-style text, use fontName='Space Grotesk' for titles/body and \
             fontName='IBM Plex Mono' for small labels, status text, numbers, and technical text.
+            For a complete Instagram treatment, set textPreset='instagramLight' or \
+            textPreset='instagramDark' instead of rebuilding its font, pill, colors, and line \
+            height. Glyph outlines are available through strokeEnabled, strokeColor, and strokeWidth.
+          • Cumulative growing-pill captions require ONE add_texts call, not add_captions. Give \
+            each visual line its own trackGroup, repeat that group on every stage of the line, and \
+            include trackGroup on EVERY entry in the grouped call. Make each word-growth stage an \
+            adjacent half-open range [startFrame, endFrame); keep each line's final completed stage \
+            visible through the caption block's end. add_captions is for conventional phrase \
+            captions, not cumulative word reveal.
           • set_keyframes: replace the keyframe track for one (clipId, property) pair. Empty \
             array clears. Frames are clip-relative.
           • apply_effect: use key.luma for simple white-background removal on video/image clips. \

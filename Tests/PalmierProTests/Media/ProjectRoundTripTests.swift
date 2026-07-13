@@ -230,6 +230,35 @@ struct ProjectRoundTripTests {
         #expect(style.fontScale == 1.0)
     }
 
+    @Test func legacyTextBackgroundGainsPillDefaults() throws {
+        let json = """
+        {
+          "fontName": "Helvetica-Bold",
+          "fontSize": 48,
+          "background": {
+            "enabled": true,
+            "color": {"r": 1, "g": 1, "b": 1, "a": 1}
+          }
+        }
+        """
+
+        let style = try JSONDecoder().decode(TextStyle.self, from: Data(json.utf8))
+        #expect(style.lineHeightMultiple == 1.0)
+        #expect(style.background.enabled)
+        #expect(style.background.paddingH == TextStyle.Background.defaultPaddingH)
+        #expect(style.background.paddingV == TextStyle.Background.defaultPaddingV)
+        #expect(style.background.cornerRadius == TextStyle.Background.defaultCornerRadius)
+    }
+
+    @Test func instagramPresetGeometrySurvivesRoundTrip() throws {
+        var style = TextStyle(fontSize: 42)
+        style.apply(.instagramLight)
+        style.border = TextStyle.Stroke(enabled: true, width: 2.5)
+
+        let data = try JSONEncoder().encode(style)
+        #expect(try JSONDecoder().decode(TextStyle.self, from: data) == style)
+    }
+
     // MARK: - MediaManifest
 
     @Test func mediaManifestSurvivesRoundTripWithBothSourceKinds() throws {

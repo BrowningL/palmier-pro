@@ -278,7 +278,7 @@ enum ToolDefinitions {
         ),
         AgentTool(
             name: .setClipProperties,
-            description: "Apply the same property values to one or more clips in a single undoable action. Pass any combination of durationFrames, trimStartFrame, trimEndFrame, speed, volume, voiceCleanupEnabled, voiceCleanupStrength, opacity, blendMode, transform, or — for text clips only — content, fontName, fontSize, color, alignment. All values are applied to every clip in clipIds; for per-clip differences, make separate calls. trimStartFrame/trimEndFrame are offsets from the source media, not the timeline. speed 1.0 is normal, <1.0 slows (clip gets longer on the timeline), >1.0 speeds up. volume and opacity are 0.0–1.0. Voice cleanup is audio-only, runs Apple's on-device High Quality Voice isolation, and persists for preview/export; passing voiceCleanupStrength implies enabled. blendMode works on video/image clips and accepts normal, multiply, screen, overlay, darken, lighten, difference, or exclusion; use difference with a white logo PNG to invert the background through the logo's alpha. transform uses 0–1 normalized canvas coords, partial merge (pass only centerY to reposition vertically); flipHorizontal/flipVertical mirror the clip across the corresponding axis (no effect on text clips). When a text clip's content or font changes without an explicit transform, the bounding box auto-refits. Text-only fields with any non-text clip in clipIds are rejected.\n\nFor moves and start-frame changes, use move_clips. For animated values (keyframes), use set_keyframes — setting volume or opacity here clears any existing keyframe track on that property.\n\nTiming changes (durationFrames, trimStartFrame, trimEndFrame, speed) on a linked clip carry over to its linked partner so audio/video stay in sync — same as the timeline UI. Per-clip fields (volume, voice cleanup, opacity, blendMode, transform, text*) don't propagate. trim and speed are skipped for text partners.",
+            description: "Apply the same property values to one or more clips in a single undoable action. Pass any combination of durationFrames, trimStartFrame, trimEndFrame, speed, volume, voiceCleanupEnabled, voiceCleanupStrength, opacity, blendMode, transform, or text-only styling. All values are applied to every clip in clipIds; for per-clip differences, make separate calls. trimStartFrame/trimEndFrame are source-media offsets. Text presets configure the real IG light/dark font, line height, pill, colors, and shadow together. Background and stroke changes auto-refit the text box unless an explicit transform is supplied.\n\nFor moves and start-frame changes, use move_clips. For animated values (keyframes), use set_keyframes — setting volume or opacity here clears any existing keyframe track on that property.\n\nTiming changes on a linked clip carry over to its linked partner so audio/video stay in sync. Per-clip fields do not propagate.",
             inputSchema: objectSchema(
                 properties: [
                     "clipIds": [
@@ -312,6 +312,12 @@ enum ToolDefinitions {
                     "fontSize": ["type": "number", "description": "Text clips only. Font size in canvas points."],
                     "color": ["type": "string", "description": "Text clips only. Hex '#RRGGBB' or '#RRGGBBAA'."],
                     "alignment": ["type": "string", "enum": ["left", "center", "right"], "description": "Text clips only."],
+                    "textPreset": ["type": "string", "enum": ["instagramLight", "instagramDark"], "description": "Text clips only. Applies the complete Instagram preset; explicit text fields in this call override the preset."],
+                    "backgroundEnabled": ["type": "boolean", "description": "Text clips only. Toggle the rounded per-line pill."],
+                    "backgroundColor": ["type": "string", "description": "Text clips only. Pill color. Supplying a color enables the pill unless backgroundEnabled=false."],
+                    "strokeEnabled": ["type": "boolean", "description": "Text clips only. Toggle the glyph outline."],
+                    "strokeColor": ["type": "string", "description": "Text clips only. Glyph-outline color. Supplying a color enables the stroke unless strokeEnabled=false."],
+                    "strokeWidth": ["type": "number", "description": "Text clips only. Glyph-outline width as 0–20 percent of font size. A positive value enables the stroke unless strokeEnabled=false."],
                 ],
                 required: ["clipIds"]
             )
@@ -425,7 +431,7 @@ enum ToolDefinitions {
         ),
         AgentTool(
             name: .addTexts,
-            description: "Adds one or more text clips (titles, captions, lower-thirds) in a single undoable action. Text renders as an overlay on top of visual media. Transform uses 0–1 normalized canvas coords: (0.5,0.5) is center, (0.5,0.1) top-center, (0.5,0.9) bottom-center. Omit transform to center + auto-fit. Pass only centerX/centerY to reposition with auto-fit size (common for lower-thirds). Pass all four fields to override the box entirely. Colors are hex '#RRGGBB' or '#RRGGBBAA'.\n\ntrackIndex is optional. Omit it on all entries and the tool auto-creates one new video track at the top and places all text clips there — the common case for captions. To target existing tracks, set trackIndex on every entry (audio tracks rejected). Mixing (some entries specify, others omit) is rejected — split into two calls.\n\nTracks work as layers: clips on the SAME track are sequential — if a new clip's range overlaps an existing (or earlier-batch) clip on that track, the existing clip is trimmed/split/removed to make room, matching the UI's drag-onto-track overwrite behavior. To show multiple text clips at the same time (stacked titles, simultaneous labels), put each on a DIFFERENT trackIndex so they layer instead of trimming each other.\n\nFor captioning spoken audio, prefer add_captions — it transcribes and places styled caption clips in one call. Use add_texts only for bespoke text (titles, lower-thirds) or captioning a custom range by hand. Unknown fields are rejected.",
+            description: "Adds one or more text clips in a single undoable action. Omit transform for center + auto-fit, or pass centerX/centerY only to keep auto-fit at a chosen position. Pass all four transform fields only for a deliberate fixed box.\n\nTo target existing tracks, set trackIndex on every entry. To create one shared new track, omit trackIndex on every entry. To atomically create several layered tracks in one call, omit trackIndex and give every entry a trackGroup; entries with the same group share a track, distinct groups get distinct tracks in first-seen top-to-bottom order. This is the reliable path for stacked growing-pill captions.\n\nClips on the same track should be adjacent and non-overlapping for progressive text. Overlap invokes overwrite/trim behavior. Use add_captions for conventional whole-phrase captions; use add_texts for bespoke or cumulative word reveals.",
             inputSchema: objectSchema(
                 properties: [
                     "entries": [
@@ -435,6 +441,7 @@ enum ToolDefinitions {
                             "type": "object",
                             "properties": [
                                 "trackIndex": ["type": "integer", "description": "Optional. Track index (0-based) for an existing non-audio track. Omit on every entry to auto-create one new track for the batch."],
+                                "trackGroup": ["type": "string", "description": "Optional when every trackIndex is omitted. Same value shares one auto-created track; different values create simultaneous layered tracks atomically."],
                                 "startFrame": ["type": "integer", "description": "Frame position to place the clip"],
                                 "durationFrames": ["type": "integer", "description": "Duration in frames (>= 1)"],
                                 "content": ["type": "string", "description": "Text to display. Supports \\n for line breaks."],
@@ -452,6 +459,12 @@ enum ToolDefinitions {
                                 "fontSize": ["type": "number", "description": "Font size in canvas points (default 96). On a 1080p canvas ~50 is a caption, ~120 is a title."],
                                 "color": ["type": "string", "description": "Hex '#RRGGBB' or '#RRGGBBAA' (default '#FFFFFF')"],
                                 "alignment": ["type": "string", "enum": ["left", "center", "right"], "description": "Text alignment (default 'center')"],
+                                "textPreset": ["type": "string", "enum": ["instagramLight", "instagramDark"], "description": "Complete Instagram text preset. Explicit style fields in the same entry override it."],
+                                "backgroundEnabled": ["type": "boolean", "description": "Rounded pill behind each visible line."],
+                                "backgroundColor": ["type": "string", "description": "Pill color. Implies enabled unless backgroundEnabled=false."],
+                                "strokeEnabled": ["type": "boolean", "description": "Toggle the glyph outline."],
+                                "strokeColor": ["type": "string", "description": "Glyph-outline color. Implies enabled unless strokeEnabled=false."],
+                                "strokeWidth": ["type": "number", "description": "Glyph-outline width as 0–20 percent of font size."],
                             ],
                             "required": ["startFrame", "durationFrames", "content"],
                         ],
@@ -470,6 +483,12 @@ enum ToolDefinitions {
                     "fontName": ["type": "string", "description": "Optional font PostScript or family name (default 'Helvetica-Bold'). Bundled Creator Connect fonts include 'Space Grotesk' and 'IBM Plex Mono'. Falls back to bold system font if not found."],
                     "fontSize": ["type": "number", "description": "Optional font size in canvas points (default 48)."],
                     "color": ["type": "string", "description": "Optional hex '#RRGGBB' or '#RRGGBBAA' (default white)."],
+                    "textPreset": ["type": "string", "enum": ["instagramLight", "instagramDark"], "description": "Optional complete Instagram text preset."],
+                    "backgroundEnabled": ["type": "boolean", "description": "Optional rounded pill toggle."],
+                    "backgroundColor": ["type": "string", "description": "Optional pill color; implies enabled unless backgroundEnabled=false."],
+                    "strokeEnabled": ["type": "boolean", "description": "Optional glyph-outline toggle."],
+                    "strokeColor": ["type": "string", "description": "Optional glyph-outline color."],
+                    "strokeWidth": ["type": "number", "description": "Optional glyph-outline width as 0–20 percent of font size."],
                     "centerX": ["type": "number", "description": "Optional horizontal center 0–1 (default 0.5)."],
                     "centerY": ["type": "number", "description": "Optional vertical center 0–1 (default 0.9, near the bottom)."],
                     "textCase": ["type": "string", "enum": ["auto", "upper", "lower"], "description": "Optional letter case (default auto)."],

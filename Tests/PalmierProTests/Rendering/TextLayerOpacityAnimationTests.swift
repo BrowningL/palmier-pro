@@ -7,14 +7,14 @@ import Testing
 @MainActor
 struct TextLayerOpacityAnimationTests {
 
-    private func animation(for clip: Clip, fps: Int = 30) -> (anim: CAKeyframeAnimation?, layer: CATextLayer?) {
+    private func animation(for clip: Clip, fps: Int = 30) -> (anim: CAKeyframeAnimation?, layer: TextClipLayer?) {
         let track = Fixtures.videoTrack(clips: [clip])
         let timeline = Fixtures.timeline(fps: fps, tracks: [track])
         let (parent, videoLayer) = TextLayerController.buildForExport(
             timeline: timeline, fps: fps, renderSize: CGSize(width: 1920, height: 1080)
         )
         _ = videoLayer
-        let textLayer = parent.sublayers?.dropFirst().first as? CATextLayer
+        let textLayer = parent.sublayers?.dropFirst().first as? TextClipLayer
         let anim = textLayer?.animation(forKey: "opacity") as? CAKeyframeAnimation
         return (anim, textLayer)
     }
@@ -84,9 +84,8 @@ struct TextLayerOpacityAnimationTests {
         style.border.enabled = true
         clip.textStyle = style
         let (_, layer) = animation(for: clip)
-        let textLayer = layer as? TextClipLayer
         #expect(layer?.borderColor == nil)
         #expect(layer?.borderWidth == 0)
-        #expect(textLayer?.glyphs.contents != nil)
+        #expect(layer?.glyphs.contents != nil)
     }
 }

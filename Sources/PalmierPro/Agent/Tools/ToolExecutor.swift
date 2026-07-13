@@ -268,6 +268,22 @@ func parseAlignment(_ raw: String?, path: String) throws -> TextStyle.Alignment?
     return a
 }
 
+func parseTextPreset(_ raw: String?, path: String) throws -> TextStyle.Preset? {
+    guard let raw else { return nil }
+    guard let preset = TextStyle.Preset(rawValue: raw) else {
+        throw ToolError("\(path): invalid textPreset '\(raw)'. Expected 'instagramLight' or 'instagramDark'.")
+    }
+    return preset
+}
+
+func parseStrokeWidth(_ value: Double?, path: String) throws -> Double? {
+    guard let value else { return nil }
+    guard value.isFinite, TextStyle.Stroke.widthRange.contains(value) else {
+        throw ToolError("\(path): strokeWidth must be between 0 and 20.")
+    }
+    return value
+}
+
 // Untrusted Double→Int: nil on NaN/Inf/overflow instead of trapping.
 func safeInt(_ d: Double) -> Int? { Int(exactly: d.rounded(.towardZero)) }
 

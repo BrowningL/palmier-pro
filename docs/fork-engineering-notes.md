@@ -194,8 +194,25 @@ Use this for simple white-background removal. Start with `threshold: 0.85` and `
 - `TextStyle.border` remains the project JSON key for compatibility, but stores a glyph stroke with enabled, color, and width. Width is a percentage of font size and legacy `{enabled,color}` values default to 3%.
 - Find it in Inspector > Text > Appearance > Stroke. Thickness supports 0–20%; enabling or resizing the stroke refits the text box.
 - Preview, snapshots, and encoded video exports share `TextClipLayer`, which draws a negative Core Text stroke width for filled, outlined glyphs and reserves an inset to avoid clipping.
-- Agent/MCP text tools do not expose stroke yet. FCPXML exports do not transport this custom style; export rendered video when the outline must be preserved.
+- Agent/MCP: `add_texts`, `add_captions`, and `set_clip_properties` accept `strokeEnabled`, `strokeColor`, and `strokeWidth`. FCPXML exports do not transport this custom style; export rendered video when the outline must be preserved.
 - `TextStrokeTests` covers legacy decoding, JSON round-trip, Core Text attributes, layout padding, and rasterized fill/stroke pixels.
+
+### Instagram Pill Captions
+
+- `instagramLight` and `instagramDark` are complete `TextStyle` presets: SF Pro Bold, calibrated 0.912 line height, matching text/pill colours, per-line rounded background, and no shadow. The inspector and agent tools call the same preset implementation.
+- `TextBackgroundPath` and `TextGlyphLayer` typeset into the same finite text rectangle. This prevents the background from drawing an invisible wrapped line (the lower white tab seen at exact fractional width boundaries).
+- `add_texts.trackGroup` atomically creates one new track per named visual line in a single undo step. Adjacent cumulative stages on each group implement the growing-pill word reveal without overlapping separate word boxes.
+- The reusable workflow, timing rules, limitations, and agent prompt live in [`docs/growing-pill-captions.md`](growing-pill-captions.md). A user-global Palmier skill can apply the same method in future projects.
+- `TextBackgroundPillTests`, `ProjectRoundTripTests`, and `ToolExecutorTests` cover finite-height layout, persistence, presets/stroke, and grouped placement.
+
+## Deferred Work
+
+### Standalone Chat Log Export
+
+- Add an Export Chat action to chat history for a standalone UTF-8 Markdown file containing the session title, date, and ordered user/assistant text. Keep technical tool payloads and results out of the default human-readable transcript.
+- Reuse the persisted `ChatSession` data already stored under `.palmier/chat/`; this is a user-facing extraction path, not a new persistence format. Export must not dirty the project.
+- Decide separately whether a later advanced option should include tool activity or lossless JSON. The current model has only a session-level `updatedAt`, so per-message timestamps require a backward-compatible model addition.
+- Likely implementation points are `ChatSessionStore.swift`, a focused formatter/exporter, and `ChatHistoryList.swift`; cover formatting, empty sessions, safe filenames, and write failures with focused tests.
 
 ## Feature Checklist
 
