@@ -4,16 +4,16 @@ import Testing
 @Suite("Social audio ducking")
 struct SocialAudioDuckingTests {
     @Test func sourceActivityMapsThroughTrimAndSpeed() {
+        let clip = Fixtures.clip(
+            mediaType: .audio, start: 100, duration: 60, trimStart: 30, speed: 2
+        )
         let ranges = SocialAudioDucking.timelineSpeechRanges(
             activity: [
                 SocialAudioActivityRange(startSeconds: 0, endSeconds: 1.5),
                 SocialAudioActivityRange(startSeconds: 2, endSeconds: 4),
                 SocialAudioActivityRange(startSeconds: 4.5, endSeconds: 6),
             ],
-            clipStartFrame: 100,
-            clipDurationFrames: 60,
-            trimStartFrame: 30,
-            speed: 2,
+            clip: clip,
             fps: 30
         )
 
@@ -26,16 +26,47 @@ struct SocialAudioDuckingTests {
     }
 
     @Test func sourceActivityRoundsOutwardAndClampsToVisibleClip() {
+        let clip = Fixtures.clip(
+            mediaType: .audio, start: 50, duration: 10, trimStart: 30
+        )
         let ranges = SocialAudioDucking.timelineSpeechRanges(
             activity: [SocialAudioActivityRange(startSeconds: 1.01, endSeconds: 1.09)],
-            clipStartFrame: 50,
-            clipDurationFrames: 10,
-            trimStartFrame: 30,
-            speed: 1,
+            clip: clip,
             fps: 30
         )
 
         #expect(ranges == [SocialAudioFrameRange(startFrame: 50, endFrame: 53)])
+    }
+
+    @Test func fractionalSlowSpeedUsesRenderedSourceSpan() {
+        let clip = Fixtures.clip(
+            mediaType: .audio, start: 100, duration: 33, trimStart: 30, speed: 0.75
+        )
+        #expect(clip.renderedSourceFramesConsumed == 24)
+
+        let ranges = SocialAudioDucking.timelineSpeechRanges(
+            activity: [SocialAudioActivityRange(startSeconds: 53.0 / 30, endSeconds: 54.0 / 30)],
+            clip: clip,
+            fps: 30
+        )
+
+        // The final rendered source frame spans the final two outward-rounded timeline frames.
+        #expect(ranges == [SocialAudioFrameRange(startFrame: 131, endFrame: 133)])
+    }
+
+    @Test func fractionalFastSpeedUsesRenderedSourceSpan() {
+        let clip = Fixtures.clip(
+            mediaType: .audio, start: 40, duration: 17, trimStart: 10, speed: 1.35
+        )
+        #expect(clip.renderedSourceFramesConsumed == 22)
+
+        let ranges = SocialAudioDucking.timelineSpeechRanges(
+            activity: [SocialAudioActivityRange(startSeconds: 31.0 / 30, endSeconds: 32.0 / 30)],
+            clip: clip,
+            fps: 30
+        )
+
+        #expect(ranges == [SocialAudioFrameRange(startFrame: 56, endFrame: 57)])
     }
 
     @Test func mergingUnionsOverlapAndAdjacency() {

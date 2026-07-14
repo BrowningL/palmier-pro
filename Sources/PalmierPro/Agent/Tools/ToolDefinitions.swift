@@ -754,7 +754,7 @@ enum ToolDefinitions {
         ),
         AgentTool(
             name: .detectBeats,
-            description: "Detect musical beats and downbeats in a media asset's audio, on-device. Returns beats and downbeats in SOURCE seconds (multiply by fps for frame values, same convention as search_media hits) plus estimated bpm. Downbeats mark bar starts — cut on downbeats for edits that land musically; beats are fine for faster montage rhythms.\n\nUse for beat-synced editing: snapping cuts to a music bed, building montages where clip boundaries hit the beat, or timing text/caption entrances to the bar. To place a cut at a beat B on a clip, the timeline frame is startFrame + (B × fps − trimStartFrame) / speed. Works on music; speech or ambience returns few or no beats. Runs locally — no subscription needed.",
+            description: "Analyze a media asset's music on-device. Returns beats, downbeats, and estimated bpm in SOURCE seconds for inspecting the raw asset or choosing a musical cadence; it does not place timeline guides. Do not convert these values to project frames by hand.\n\nFor timeline-aligned cuts, transitions, or text entrances, use add_beat_markers with the timeline clipId instead. It accounts for clip placement, trim, fractional retiming, and project FPS, then creates exact snapping project-frame guides. Downbeats mark bar starts; beats suit faster montage rhythms. Speech or ambience returns few or no beats. Runs locally — no subscription needed.",
             inputSchema: objectSchema(
                 properties: [
                     "mediaRef": ["type": "string", "description": "Audio or video asset id from get_media."],

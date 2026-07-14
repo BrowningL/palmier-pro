@@ -77,30 +77,25 @@ enum SocialAudioDucking {
     /// Maps source-file speech activity onto the project timeline.
     ///
     /// Activity is first intersected with the clip's visible source interval.
-    /// The mapping invariant is:
-    /// `timeline = clipStart + (sourceFrame - trimStart) / speed`.
+    /// Mapping uses `Clip.renderedSourceFramesConsumed` and
+    /// `Clip.effectivePlaybackSpeed`, matching CompositionBuilder's integer source span.
     static func timelineSpeechRanges(
         activity: [SocialAudioActivityRange],
-        clipStartFrame: Int,
-        clipDurationFrames: Int,
-        trimStartFrame: Int,
-        speed: Double,
+        clip: Clip,
         fps: Int
     ) -> [SocialAudioFrameRange] {
         guard fps > 0,
-              clipDurationFrames > 0,
-              speed.isFinite,
-              speed > 0
+              clip.durationFrames > 0,
+              clip.speed.isFinite,
+              clip.speed > 0
         else { return [] }
 
-        let clipEndFrame = clipStartFrame + clipDurationFrames
-        let visibleSourceStart = Double(trimStartFrame)
-        // Match CompositionBuilder's integer source span for fractional speeds.
-        let consumedSourceFrames = Double(
-            speed == 1 ? clipDurationFrames : max(1, Int(Double(clipDurationFrames) * speed))
-        )
+        let clipEndFrame = clip.endFrame
+        let visibleSourceStart = Double(clip.trimStartFrame)
+        let consumedSourceFrames = Double(clip.renderedSourceFramesConsumed)
         let visibleSourceEnd = visibleSourceStart + consumedSourceFrames
-        guard visibleSourceEnd > visibleSourceStart else { return [] }
+        let effectivePlaybackSpeed = clip.effectivePlaybackSpeed
+        guard visibleSourceEnd > visibleSourceStart, effectivePlaybackSpeed > 0 else { return [] }
 
         let mapped = activity.compactMap { sourceRange -> SocialAudioFrameRange? in
             guard sourceRange.startSeconds.isFinite,
@@ -112,10 +107,12 @@ enum SocialAudioDucking {
             let sourceEnd = min(visibleSourceEnd, sourceRange.endSeconds * Double(fps))
             guard sourceEnd > sourceStart else { return nil }
 
-            let timelineStart = Double(clipStartFrame) + (sourceStart - visibleSourceStart) / speed
-            let timelineEnd = Double(clipStartFrame) + (sourceEnd - visibleSourceStart) / speed
-            let start = min(clipEndFrame, max(clipStartFrame, tolerantFloor(timelineStart)))
-            let end = min(clipEndFrame, max(clipStartFrame, tolerantCeil(timelineEnd)))
+            let timelineStart = Double(clip.startFrame)
+                + (sourceStart - visibleSourceStart) / effectivePlaybackSpeed
+            let timelineEnd = Double(clip.startFrame)
+                + (sourceEnd - visibleSourceStart) / effectivePlaybackSpeed
+            let start = min(clipEndFrame, max(clip.startFrame, tolerantFloor(timelineStart)))
+            let end = min(clipEndFrame, max(clip.startFrame, tolerantCeil(timelineEnd)))
             guard end > start else { return nil }
             return SocialAudioFrameRange(startFrame: start, endFrame: end)
         }

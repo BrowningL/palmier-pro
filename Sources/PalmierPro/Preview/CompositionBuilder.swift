@@ -523,10 +523,7 @@ enum CompositionBuilder {
                           }) else { return [] }
                     return SocialAudioDucking.timelineSpeechRanges(
                         activity: activity,
-                        clipStartFrame: clip.startFrame,
-                        clipDurationFrames: clip.durationFrames,
-                        trimStartFrame: clip.trimStartFrame,
-                        speed: clip.speed,
+                        clip: clip,
                         fps: timeline.fps
                     )
                 }
