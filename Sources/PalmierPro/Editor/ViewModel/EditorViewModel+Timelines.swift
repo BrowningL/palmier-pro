@@ -230,15 +230,21 @@ extension EditorViewModel {
         var removed: Set<String> = []
         for i in timelines.indices {
             var touched = false
+            var removedFromTimeline: Set<String> = []
             for t in timelines[i].tracks.indices {
                 let hits = timelines[i].tracks[t].clips.filter { assetIds.contains($0.mediaRef) }
                 guard !hits.isEmpty else { continue }
-                removed.formUnion(hits.map(\.id))
+                removedFromTimeline.formUnion(hits.map(\.id))
                 timelines[i].tracks[t].clips.removeAll { assetIds.contains($0.mediaRef) }
                 touched = true
             }
-            if touched { timelines[i].tracks.removeAll(where: \.clips.isEmpty) }
+            if touched {
+                removed.formUnion(removedFromTimeline)
+                timelines[i].removeGeneratedMarkers(sourceClipIds: removedFromTimeline)
+                timelines[i].tracks.removeAll(where: \.clips.isEmpty)
+            }
         }
+        for id in removed { beatMarkerRequestIds.removeValue(forKey: id) }
         selectedClipIds.subtract(removed)
         return removed
     }

@@ -40,9 +40,7 @@ extension EditorViewModel {
                 clip.mediaRef == id ? clip.id : nil
             })
             sourceClipIds.formUnion(ids)
-            timelines[timelineIndex].markers.removeAll { marker in
-                marker.kind == .beat && marker.sourceClipId.map(ids.contains) == true
-            }
+            timelines[timelineIndex].removeGeneratedMarkers(sourceClipIds: ids)
         }
         for sourceClipId in sourceClipIds {
             beatMarkerRequestIds.removeValue(forKey: sourceClipId)

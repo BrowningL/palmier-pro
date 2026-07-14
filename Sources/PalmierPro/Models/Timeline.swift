@@ -178,6 +178,17 @@ struct TimelineMarker: Codable, Sendable, Equatable, Identifiable {
 }
 
 extension Timeline {
+    var clipIds: Set<String> {
+        Set(tracks.lazy.flatMap(\.clips).map(\.id))
+    }
+
+    mutating func removeGeneratedMarkers(sourceClipIds: Set<String>) {
+        guard !sourceClipIds.isEmpty else { return }
+        markers.removeAll { marker in
+            marker.kind == .beat && marker.sourceClipId.map(sourceClipIds.contains) == true
+        }
+    }
+
     /// Manual markers and generated grids whose source timing still matches.
     var activeMarkers: [TimelineMarker] {
         var signatures: [String: String] = [:]

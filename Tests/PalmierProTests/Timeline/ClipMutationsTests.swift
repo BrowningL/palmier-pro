@@ -303,6 +303,52 @@ struct RemoveClipsTests {
         // selection subtract is set-based, not membership-checked.
         #expect(!e.selectedClipIds.contains("c1"))
     }
+
+    @Test func removeClipRetiresOnlyItsGeneratedMarkersAndUndoRestoresThem() {
+        let removed = Fixtures.clip(id: "remove", mediaType: .audio, start: 0, duration: 30)
+        let kept = Fixtures.clip(id: "keep", mediaType: .audio, start: 30, duration: 30)
+        let e = editor([Fixtures.audioTrack(clips: [removed, kept])])
+        e.timeline.markers = [
+            TimelineMarker(id: "manual", frame: 5, label: "Keep", sourceClipId: removed.id),
+            TimelineMarker(id: "removed-beat", frame: 10, kind: .beat, sourceClipId: removed.id),
+            TimelineMarker(id: "kept-beat", frame: 40, kind: .beat, sourceClipId: kept.id),
+        ]
+        let removedRequest = UUID()
+        let keptRequest = UUID()
+        e.beatMarkerRequestIds = [removed.id: removedRequest, kept.id: keptRequest]
+        let undo = UndoManager()
+        e.undoManager = undo
+
+        e.removeClips(ids: [removed.id], prune: false)
+
+        #expect(e.timeline.markers.map(\.id) == ["manual", "kept-beat"])
+        #expect(e.beatMarkerRequestIds[removed.id] == nil)
+        #expect(e.beatMarkerRequestIds[kept.id] == keptRequest)
+
+        undo.undo()
+        #expect(e.timeline.clipIds == [removed.id, kept.id])
+        #expect(e.timeline.markers.map(\.id) == ["manual", "removed-beat", "kept-beat"])
+
+        undo.redo()
+        #expect(e.timeline.clipIds == [kept.id])
+        #expect(e.timeline.markers.map(\.id) == ["manual", "kept-beat"])
+    }
+
+    @Test func removeTrackRetiresGeneratedMarkersForOnlyThatTracksClips() {
+        let removed = Fixtures.clip(id: "remove", mediaType: .audio, start: 0, duration: 30)
+        let kept = Fixtures.clip(id: "keep", mediaType: .audio, start: 0, duration: 30)
+        let removedTrack = Fixtures.audioTrack(clips: [removed])
+        let e = editor([removedTrack, Fixtures.audioTrack(clips: [kept])])
+        e.timeline.markers = [
+            TimelineMarker(id: "removed-beat", frame: 10, kind: .beat, sourceClipId: removed.id),
+            TimelineMarker(id: "kept-beat", frame: 10, kind: .beat, sourceClipId: kept.id),
+            TimelineMarker(id: "manual", frame: 15, label: "Keep"),
+        ]
+
+        e.removeTrack(id: removedTrack.id)
+
+        #expect(e.timeline.markers.map(\.id) == ["kept-beat", "manual"])
+    }
 }
 
 @Suite("EditorViewModel — moveClips")
@@ -315,11 +361,13 @@ struct MoveClipsTests {
             Fixtures.videoTrack(clips: [c1]),
             Fixtures.videoTrack(clips: []),
         ])
+        e.timeline.markers = [TimelineMarker(id: "beat", frame: 10, kind: .beat, sourceClipId: c1.id)]
         let destTrackId = e.timeline.tracks[1].id
         e.moveClips([(clipId: "c1", toTrack: 1, toFrame: 100)])
         let loc = e.findClip(id: "c1")!
         #expect(e.timeline.tracks[loc.trackIndex].id == destTrackId)
         #expect(e.timeline.tracks[loc.trackIndex].clips[loc.clipIndex].startFrame == 100)
+        #expect(e.timeline.markers.map(\.id) == ["beat"])
     }
 
     @Test func moveClipsRejectsIncompatibleTrackType() {

@@ -265,6 +265,9 @@ extension EditorViewModel {
         undoManager?.disableUndoRegistration()
         work()
         undoManager?.enableUndoRegistration()
+        let removedClipIds = before.clipIds.subtracting(timeline.clipIds)
+        timeline.removeGeneratedMarkers(sourceClipIds: removedClipIds)
+        for id in removedClipIds { beatMarkerRequestIds.removeValue(forKey: id) }
         let after = timeline
         guard before != after else { return }
         // Skip when nested: an outer withTimelineSwap is still suppressing

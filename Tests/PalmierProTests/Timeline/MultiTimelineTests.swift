@@ -199,6 +199,57 @@ struct MultiTimelineTests {
         #expect(rest.tracks[0].clips.map(\.mediaRef) == ["m2"])
     }
 
+    @Test func deleteMediaRetiresExactGeneratedMarkersAcrossTimelinesAndUndoRestoresThem() throws {
+        let e = EditorViewModel()
+        let firstClip = Fixtures.clip(id: "first-song", mediaRef: "song", mediaType: .audio, start: 0, duration: 30)
+        let firstOther = Fixtures.clip(id: "first-other", mediaRef: "other", mediaType: .audio, start: 30, duration: 30)
+        e.timeline.tracks = [Fixtures.audioTrack(clips: [firstClip, firstOther])]
+        e.timeline.markers = [
+            TimelineMarker(id: "manual", frame: 5, label: "Keep", sourceClipId: firstClip.id),
+            TimelineMarker(id: "first-beat", frame: 10, kind: .beat, sourceClipId: firstClip.id),
+            TimelineMarker(id: "other-beat", frame: 40, kind: .beat, sourceClipId: firstOther.id),
+        ]
+
+        let secondId = e.createTimeline(activate: false)
+        let secondIndex = try #require(e.timelines.firstIndex { $0.id == secondId })
+        let secondClip = Fixtures.clip(id: "second-song", mediaRef: "song", mediaType: .audio, start: 0, duration: 30)
+        e.timelines[secondIndex].tracks = [Fixtures.audioTrack(clips: [secondClip])]
+        e.timelines[secondIndex].markers = [
+            TimelineMarker(id: "second-beat", frame: 10, kind: .beat, sourceClipId: secondClip.id),
+        ]
+        e.mediaAssets = [
+            MediaAsset(
+                id: "song", url: URL(fileURLWithPath: "/tmp/song.wav"),
+                type: .audio, name: "Song", duration: 1
+            ),
+            MediaAsset(
+                id: "other", url: URL(fileURLWithPath: "/tmp/other.wav"),
+                type: .audio, name: "Other", duration: 1
+            ),
+        ]
+        let otherRequest = UUID()
+        e.beatMarkerRequestIds = [firstClip.id: UUID(), firstOther.id: otherRequest, secondClip.id: UUID()]
+        let undo = UndoManager()
+        e.undoManager = undo
+        undo.removeAllActions()
+
+        e.deleteMediaAssets(ids: ["song"])
+
+        #expect(e.timeline.markers.map(\.id) == ["manual", "other-beat"])
+        #expect(e.timeline(for: secondId)?.markers.isEmpty == true)
+        #expect(e.beatMarkerRequestIds == [firstOther.id: otherRequest])
+
+        undo.undo()
+        #expect(e.timeline.markers.map(\.id) == ["manual", "first-beat", "other-beat"])
+        #expect(e.timeline(for: secondId)?.markers.map(\.id) == ["second-beat"])
+        #expect(e.timeline.clipIds == [firstClip.id, firstOther.id])
+        #expect(e.timeline(for: secondId)?.clipIds == [secondClip.id])
+
+        undo.redo()
+        #expect(e.timeline.markers.map(\.id) == ["manual", "other-beat"])
+        #expect(e.timeline(for: secondId)?.markers.isEmpty == true)
+    }
+
     @Test func relinkingMediaRetiresGeneratedGuidesAcrossEveryTimeline() throws {
         let replacement = FileManager.default.temporaryDirectory
             .appendingPathComponent("replacement-\(UUID().uuidString).wav")
