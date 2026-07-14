@@ -80,6 +80,15 @@ final class EditorViewModel {
     var showGenerationPanel: Bool = false {
         didSet { if showGenerationPanel && !oldValue { showMediaPanelMediaTab() } }
     }
+    var isSocialAudioMixing = false
+    var socialAudioMixMessage: String?
+    var socialAudioPreset: SocialAudioPreset = {
+        guard let raw = UserDefaults.standard.string(forKey: "socialAudioPreset"),
+              let preset = SocialAudioPreset(rawValue: raw) else { return .balanced }
+        return preset
+    }() {
+        didSet { UserDefaults.standard.set(socialAudioPreset.rawValue, forKey: "socialAudioPreset") }
+    }
     /// AIEditTab input consumed by GenerationView.
     var pendingPanelSeed: PendingPanelSeed?
     var pendingEditReplacementClipId: String?
@@ -112,6 +121,9 @@ final class EditorViewModel {
     var unprocessableMediaRefs: Set<String> = []
     var missingMediaRefs: Set<String> = []
     @ObservationIgnored var missingMediaRefreshTask: Task<Void, Never>?
+    /// Latest beat-marker mutation per canonical audio clip. Prevents an older,
+    /// slower analysis from overwriting a newer cadence request.
+    @ObservationIgnored var beatMarkerRequestIds: [String: UUID] = [:]
     let mediaVisualCache = MediaVisualCache()
     let searchIndex = SearchIndexCoordinator()
     var projectURL: URL? {
@@ -208,7 +220,20 @@ final class EditorViewModel {
     // MARK: - Document bridge
 
     weak var undoManager: UndoManager?
+    @ObservationIgnored var onDocumentEdited: (@MainActor () -> Void)?
+    /// Coalesce duplicate dirty notifications from a single synchronous edit,
+    /// but keep later edits visible to NSDocument/autosave even while already dirty.
+    @ObservationIgnored private var documentEditNotificationPending = false
     var isDocumentEdited: Bool = false
+
+    func markDocumentEdited() {
+        guard !documentEditNotificationPending else { return }
+        documentEditNotificationPending = true
+        onDocumentEdited?()
+        Task { @MainActor [weak self] in
+            self?.documentEditNotificationPending = false
+        }
+    }
 
     func telemetrySnapshot() -> [String: Any] {
         var mediaCounts: [String: Int] = [:]
@@ -328,6 +353,7 @@ final class EditorViewModel {
     var pendingRebuildTask: Task<Void, Never>?
 
     func notifyTimelineChanged() {
+        markDocumentEdited()
         pendingRebuildTask?.cancel()
         pendingRebuildTask = nil
         if isPlaying {
@@ -339,6 +365,7 @@ final class EditorViewModel {
 
     /// Coalesce rapid rebuilds. An immediate `notifyTimelineChanged` cancels any pending debounced one.
     func notifyTimelineChangedDebounced(debounce: Duration = .milliseconds(120)) {
+        markDocumentEdited()
         pendingRebuildTask?.cancel()
         pendingRebuildTask = Task { @MainActor [weak self] in
             try? await Task.sleep(for: debounce)

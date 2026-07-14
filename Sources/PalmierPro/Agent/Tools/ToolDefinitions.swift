@@ -4,6 +4,11 @@ import MCP
 enum ToolName: String, CaseIterable, Sendable {
     case getTimeline = "get_timeline"
     case getMedia = "get_media"
+    case addMarkers = "add_markers"
+    case setMarkerProperties = "set_marker_properties"
+    case removeMarkers = "remove_markers"
+    case detectBeats = "detect_beats"
+    case addBeatMarkers = "add_beat_markers"
     case addClips = "add_clips"
     case insertClips = "insert_clips"
     case removeClips = "remove_clips"
@@ -42,6 +47,27 @@ enum ToolName: String, CaseIterable, Sendable {
     case sendFeedback = "send_feedback"
     case setProjectSettings = "set_project_settings"
     case readSkill = "read_skill"
+
+    /// Only these tools are allowed to claim a newly-created timeline undo item.
+    /// Async read tools can overlap a user's edit; inferring ownership from a
+    /// before/after timeline diff would otherwise let the agent undo that user edit.
+    var canRecordTimelineUndo: Bool {
+        switch self {
+        case .addMarkers, .setMarkerProperties, .removeMarkers, .addBeatMarkers,
+             .addClips, .insertClips, .removeClips, .removeTracks, .moveClips,
+             .setClipProperties, .setKeyframes, .splitClips, .rippleDeleteRanges,
+             .removeWords, .syncAudio, .addTexts, .addCaptions, .applyColor,
+             .applyEffect, .setProjectSettings:
+            true
+        case .getTimeline, .getMedia, .detectBeats, .undo, .exportProject,
+             .generateVideo, .generateImage, .generateAudio, .upscaleMedia,
+             .importMedia, .listModels, .inspectMedia, .getTranscript,
+             .inspectTimeline, .searchMedia, .inspectColor, .listFolders,
+             .createFolder, .moveToFolder, .renameMedia, .renameFolder,
+             .deleteMedia, .deleteFolder, .sendFeedback, .readSkill:
+            false
+        }
+    }
 }
 
 struct AgentTool: @unchecked Sendable {
@@ -54,7 +80,7 @@ enum ToolDefinitions {
     static let all: [AgentTool] = [
         AgentTool(
             name: .getTimeline,
-            description: "Always call at the start of a session. Returns project settings (fps, resolution, totalFrames), track list with types and order, all clips with their frames and properties, and canGenerate (if false, generation/upscale tools will fail — tell the user to sign in to Palmier and subscribe before attempting them). The clipId/trackId values here are what every other tool accepts.\n\nClip and track fields equal to their defaults are omitted: mediaType 'video', sourceClipType = mediaType, speed 1, volume 1, opacity 1, trims/fades 0, identity transform/crop, default textStyle, track muted/hidden false. Text clips never report trims (no source media).\n\nCaption clips (sharing a captionGroupId) come back per track as captionGroups instead of clips entries: properties common to the group are hoisted into 'shared' and each clip is a [clipId, startFrame, durationFrames, text] row (caption box width/height are auto-fit per text and omitted). Rows are capped at 200 per group — when clipCount exceeds the rows shown, page with startFrame/endFrame. Caption clips whose properties deviate from the group appear individually in clips.",
+            description: "Always call at the start of a session. Returns project settings (fps, resolution, totalFrames), timeline markers, track list with types and order, all clips with their frames and properties, and canGenerate (if false, generation/upscale tools will fail — tell the user to sign in to Palmier and subscribe before attempting them). The clipId/trackId/markerId values here are what other tools accept.\n\nMarkers are exact project-frame anchors for placement; use a marker's frame as add_clips.startFrame when placing media at that marker. Dense generated beats are returned compactly as beatMarkerGroups with beatFormat [frame, beatIndex, strength], grouped by sourceClipId; ordinary markers remain in markers. Beat rows are capped at 500 per group and return nextStartFrame for paging with startFrame/endFrame. Grids automatically become inactive if their source clip timing changes.\n\nClip and track fields equal to their defaults are omitted: mediaType 'video', sourceClipType = mediaType, speed 1, volume 1, opacity 1, blendMode 'normal', trims/fades 0, identity transform/crop, default textStyle, track muted/hidden false. Text clips never report trims (no source media).\n\nCaption clips (sharing a captionGroupId) come back per track as captionGroups instead of clips entries: properties common to the group are hoisted into 'shared' and each clip is a [clipId, startFrame, durationFrames, text] row (caption box width/height are auto-fit per text and omitted). Rows are capped at 200 per group — when clipCount exceeds the rows shown, page with startFrame/endFrame. Caption clips whose properties deviate from the group appear individually in clips.",
             inputSchema: objectSchema(
                 properties: [
                     "startFrame": ["type": "integer", "description": "Optional. Window start (inclusive); only clips intersecting [startFrame, endFrame) are returned. Tracks report totalClips when the window hides some."],
@@ -66,6 +92,92 @@ enum ToolDefinitions {
             name: .getMedia,
             description: "Call before referencing any asset. Every mediaRef/reference ID in other tools comes from the IDs returned here. Also exposes generationStatus (generating | downloading | failed | none) for async-generated and -imported assets.",
             inputSchema: objectSchema()
+        ),
+        AgentTool(
+            name: .addMarkers,
+            description: "Creates one or more timeline markers at exact project frames. Use markers as named placement anchors for later image/video/text insertion. Markers do not render and do not lengthen exports. Frame values are project frames from get_timeline.",
+            inputSchema: objectSchema(
+                properties: [
+                    "entries": [
+                        "type": "array",
+                        "description": "Markers to create.",
+                        "items": [
+                            "type": "object",
+                            "properties": [
+                                "frame": ["type": "integer", "description": "Exact project frame for the marker."],
+                                "label": ["type": "string", "description": "Optional display label, e.g. 'Insert logo frame'."],
+                                "color": ["type": "string", "description": "Optional hex color '#RRGGBB' or '#RRGGBBAA'."],
+                            ],
+                            "required": ["frame"],
+                        ],
+                    ],
+                ],
+                required: ["entries"]
+            )
+        ),
+        AgentTool(
+            name: .setMarkerProperties,
+            description: "Updates one or more timeline markers. Use this to rename markers, move them to another exact frame, or change their color. For different values per marker, make separate calls.",
+            inputSchema: objectSchema(
+                properties: [
+                    "markerIds": [
+                        "type": "array",
+                        "items": ["type": "string"],
+                        "description": "Marker ids from get_timeline or add_markers.",
+                    ],
+                    "frame": ["type": "integer", "description": "Optional new exact project frame."],
+                    "label": ["type": "string", "description": "Optional new label. Empty string clears it."],
+                    "color": ["type": "string", "description": "Optional hex color '#RRGGBB' or '#RRGGBBAA'. Empty string clears it."],
+                ],
+                required: ["markerIds"]
+            )
+        ),
+        AgentTool(
+            name: .removeMarkers,
+            description: "Deletes timeline markers by id, or removes all generated beat markers associated with one source clip. This only removes marker anchors; it never removes clips or media.",
+            inputSchema: objectSchema(
+                properties: [
+                    "markerIds": [
+                        "type": "array",
+                        "items": ["type": "string"],
+                        "description": "Marker ids from get_timeline.",
+                    ],
+                    "sourceClipId": ["type": "string", "description": "Optional. Remove every generated beat marker from this timeline clip while preserving manual markers. May be combined with markerIds."],
+                ]
+            )
+        ),
+        AgentTool(
+            name: .detectBeats,
+            description: "Analyses a timeline music/audio clip on-device and returns its beat grid as exact PROJECT frames without changing the timeline. Analysis follows the clip's visible trim, speed, and position. Use these returned frames directly for beat-timed photo cuts; do not reconstruct a grid from BPM alone. Strength and confidence are 0...1. Beat detection does not claim musical bars or downbeats.",
+            inputSchema: objectSchema(
+                properties: [
+                    "clipId": ["type": "string", "description": "Timeline audio clip, or a video clip whose source has audio."],
+                    "minBPM": ["type": "number", "description": "Optional tempo search minimum (default 60, allowed 30...300)."],
+                    "maxBPM": ["type": "number", "description": "Optional tempo search maximum (default 200, allowed 30...300)."],
+                    "bpmOverride": ["type": "number", "description": "Optional known BPM (30...300). Resolves unavoidable half/double-tempo ambiguity; it does not invent beat phase."],
+                    "startFrame": ["type": "integer", "description": "Optional PROJECT-frame lower bound for returned rows. Analysis still uses the clip context."],
+                    "endFrame": ["type": "integer", "description": "Optional exclusive PROJECT-frame upper bound for returned rows. Page long grids with startFrame/endFrame."],
+                ],
+                required: ["clipId"]
+            )
+        ),
+        AgentTool(
+            name: .addBeatMarkers,
+            description: "Analyses a timeline music/audio clip and atomically creates visible, snapping beat markers at exact PROJECT frames. Re-running safely replaces only generated beat markers from the same source clip; manual markers are preserved. Returns the selected cadence boundaries as compact rows so they can immediately drive photo placement. everyNthBeat controls editing cadence but does NOT mean downbeats or bars.",
+            inputSchema: objectSchema(
+                properties: [
+                    "clipId": ["type": "string", "description": "Timeline audio clip, or a video clip whose source has audio."],
+                    "everyNthBeat": ["type": "integer", "description": "Place every Nth detected beat, 1...16 (default 1). Photo montages often read better at 2 or 4."],
+                    "beatOffset": ["type": "integer", "description": "Offset within everyNthBeat, zero-based (default 0, must be less than everyNthBeat)."],
+                    "minBPM": ["type": "number", "description": "Optional tempo search minimum (default 60, allowed 30...300)."],
+                    "maxBPM": ["type": "number", "description": "Optional tempo search maximum (default 200, allowed 30...300)."],
+                    "bpmOverride": ["type": "number", "description": "Optional known BPM (30...300) to resolve half/double-tempo ambiguity."],
+                    "minimumConfidence": ["type": "number", "description": "Refuse marker creation below this confidence, 0.45...1 (default 0.45). A lower value requires explicit user acceptance and allowLowConfidence=true."],
+                    "allowLowConfidence": ["type": "boolean", "description": "Set true only when the user accepts an uncertain grid. Default false."],
+                    "color": ["type": "string", "description": "Optional marker hex color; defaults to Palmier audio green (#58A822)."],
+                ],
+                required: ["clipId"]
+            )
         ),
         AgentTool(
             name: .inspectMedia,
@@ -222,7 +334,7 @@ enum ToolDefinitions {
         ),
         AgentTool(
             name: .setClipProperties,
-            description: "Apply the same property values to one or more clips in a single undoable action. Pass any combination of durationFrames, trimStartFrame, trimEndFrame, speed, volume, opacity, transform, or — for text clips only — content, fontName, fontSize, color, alignment. All values are applied to every clip in clipIds; for per-clip differences, make separate calls. trimStartFrame/trimEndFrame are offsets from the source media, not the timeline. speed 1.0 is normal, <1.0 slows (clip gets longer on the timeline), >1.0 speeds up. volume and opacity are 0.0–1.0. transform uses 0–1 normalized canvas coords, partial merge (pass only centerY to reposition vertically); flipHorizontal/flipVertical mirror the clip across the corresponding axis (no effect on text clips). When a text clip's content or font changes without an explicit transform, the bounding box auto-refits. Text-only fields with any non-text clip in clipIds are rejected.\n\nFor moves and start-frame changes, use move_clips. For animated values (keyframes), use set_keyframes — setting volume or opacity here clears any existing keyframe track on that property.\n\nTiming changes (durationFrames, trimStartFrame, trimEndFrame, speed) on a linked clip carry over to its linked partner so audio/video stay in sync — same as the timeline UI. Per-clip fields (volume, opacity, transform, text*) don't propagate. trim and speed are skipped for text partners.",
+            description: "Apply the same property values to one or more clips in a single undoable action. Pass any combination of durationFrames, trimStartFrame, trimEndFrame, speed, volume, voiceCleanupEnabled, voiceCleanupStrength, opacity, blendMode, transform, or text-only styling. All values are applied to every clip in clipIds; for per-clip differences, make separate calls. trimStartFrame/trimEndFrame are source-media offsets. Text presets configure the real IG light/dark font, line height, pill, colors, and shadow together. Background and stroke changes auto-refit the text box unless an explicit transform is supplied.\n\nFor moves and start-frame changes, use move_clips. For animated values (keyframes), use set_keyframes — setting volume or opacity here clears any existing keyframe track on that property.\n\nTiming changes on a linked clip carry over to its linked partner so audio/video stay in sync. Per-clip fields do not propagate.",
             inputSchema: objectSchema(
                 properties: [
                     "clipIds": [
@@ -235,7 +347,10 @@ enum ToolDefinitions {
                     "trimEndFrame": ["type": "integer", "description": "SOURCE-media offset, NOT a timeline frame: frames trimmed off the end of the source, in PROJECT frames. Maps the same way as trimStartFrame via startFrame/speed."],
                     "speed": ["type": "number", "description": "Playback speed multiplier (default 1.0). >1 speeds up, <1 slows down. The clip's timeline length is rescaled to keep the same source content (2x speed → half the frames), unless you also pass durationFrames to set the length explicitly."],
                     "volume": ["type": "number", "description": "Volume 0.0-1.0. Clears any existing volume keyframes."],
+                    "voiceCleanupEnabled": ["type": "boolean", "description": "Audio clips only. Enable or disable on-device High Quality Voice isolation for background-noise removal."],
+                    "voiceCleanupStrength": ["type": "number", "description": "Audio clips only. Voice-isolation mix from 0.0 (original) to 1.0 (fully isolated). Implies voiceCleanupEnabled=true."],
                     "opacity": ["type": "number", "description": "Opacity 0.0-1.0. Clears any existing opacity keyframes."],
+                    "blendMode": ["type": "string", "enum": ClipBlendMode.allCases.map(\.rawValue), "description": "Video/image clips only. How this clip composites over lower tracks. 'normal' is source-over. 'difference' with a white logo PNG inverts the background through the logo alpha; 'exclusion' is a softer inversion."],
                     "transform": [
                         "type": "object",
                         "description": "Partial transform. Any combination of centerX, centerY, width, height, flipHorizontal, flipVertical; omitted fields keep their current value.",
@@ -249,10 +364,16 @@ enum ToolDefinitions {
                         ],
                     ],
                     "content": ["type": "string", "description": "Text clips only. New text content."],
-                    "fontName": ["type": "string", "description": "Text clips only. Font PostScript or family name."],
+                    "fontName": ["type": "string", "description": "Text clips only. Font PostScript or family name. Bundled Creator Connect fonts include 'Space Grotesk' and 'IBM Plex Mono'."],
                     "fontSize": ["type": "number", "description": "Text clips only. Font size in canvas points."],
                     "color": ["type": "string", "description": "Text clips only. Hex '#RRGGBB' or '#RRGGBBAA'."],
                     "alignment": ["type": "string", "enum": ["left", "center", "right"], "description": "Text clips only."],
+                    "textPreset": ["type": "string", "enum": ["instagramLight", "instagramDark"], "description": "Text clips only. Applies the complete Instagram preset; explicit text fields in this call override the preset."],
+                    "backgroundEnabled": ["type": "boolean", "description": "Text clips only. Toggle the rounded per-line pill."],
+                    "backgroundColor": ["type": "string", "description": "Text clips only. Pill color. Supplying a color enables the pill unless backgroundEnabled=false."],
+                    "strokeEnabled": ["type": "boolean", "description": "Text clips only. Toggle the glyph outline."],
+                    "strokeColor": ["type": "string", "description": "Text clips only. Glyph-outline color. Supplying a color enables the stroke unless strokeEnabled=false."],
+                    "strokeWidth": ["type": "number", "description": "Text clips only. Glyph-outline width as 0–20 percent of font size. A positive value enables the stroke unless strokeEnabled=false."],
                 ],
                 required: ["clipIds"]
             )
@@ -366,7 +487,7 @@ enum ToolDefinitions {
         ),
         AgentTool(
             name: .addTexts,
-            description: "Adds one or more text clips (titles, captions, lower-thirds) in a single undoable action. Text renders as an overlay on top of visual media. Transform uses 0–1 normalized canvas coords: (0.5,0.5) is center, (0.5,0.1) top-center, (0.5,0.9) bottom-center. Omit transform to center + auto-fit. Pass only centerX/centerY to reposition with auto-fit size (common for lower-thirds). Pass all four fields to override the box entirely. Colors are hex '#RRGGBB' or '#RRGGBBAA'.\n\ntrackIndex is optional. Omit it on all entries and the tool auto-creates one new video track at the top and places all text clips there — the common case for captions. To target existing tracks, set trackIndex on every entry (audio tracks rejected). Mixing (some entries specify, others omit) is rejected — split into two calls.\n\nTracks work as layers: clips on the SAME track are sequential — if a new clip's range overlaps an existing (or earlier-batch) clip on that track, the existing clip is trimmed/split/removed to make room, matching the UI's drag-onto-track overwrite behavior. To show multiple text clips at the same time (stacked titles, simultaneous labels), put each on a DIFFERENT trackIndex so they layer instead of trimming each other.\n\nFor captioning spoken audio, prefer add_captions — it transcribes and places styled caption clips in one call. Use add_texts only for bespoke text (titles, lower-thirds) or captioning a custom range by hand. Unknown fields are rejected.",
+            description: "Adds one or more text clips in a single undoable action. Omit transform for center + auto-fit, or pass centerX/centerY only to keep auto-fit at a chosen position. Pass all four transform fields only for a deliberate fixed box.\n\nTo target existing tracks, set trackIndex on every entry. To create one shared new track, omit trackIndex on every entry. To atomically create several layered tracks in one call, omit trackIndex and give every entry a trackGroup; entries with the same group share a track, distinct groups get distinct tracks in first-seen top-to-bottom order. This is the reliable path for stacked growing-pill captions.\n\nClips on the same track should be adjacent and non-overlapping for progressive text. Overlap invokes overwrite/trim behavior. Use add_captions for conventional whole-phrase captions; use add_texts for bespoke or cumulative word reveals.",
             inputSchema: objectSchema(
                 properties: [
                     "entries": [
@@ -376,6 +497,7 @@ enum ToolDefinitions {
                             "type": "object",
                             "properties": [
                                 "trackIndex": ["type": "integer", "description": "Optional. Track index (0-based) for an existing non-audio track. Omit on every entry to auto-create one new track for the batch."],
+                                "trackGroup": ["type": "string", "description": "Optional when every trackIndex is omitted. Same value shares one auto-created track; different values create simultaneous layered tracks atomically."],
                                 "startFrame": ["type": "integer", "description": "Frame position to place the clip"],
                                 "durationFrames": ["type": "integer", "description": "Duration in frames (>= 1)"],
                                 "content": ["type": "string", "description": "Text to display. Supports \\n for line breaks."],
@@ -389,10 +511,16 @@ enum ToolDefinitions {
                                         "height": ["type": "number", "description": "Height 0–1 (optional; omit for auto-fit)"],
                                     ],
                                 ],
-                                "fontName": ["type": "string", "description": "Font PostScript or family name, e.g. 'Helvetica-Bold', 'Georgia-Bold'. Default 'Helvetica-Bold'. Falls back to bold system font if not found."],
+                                "fontName": ["type": "string", "description": "Font PostScript or family name, e.g. 'Space Grotesk', 'IBM Plex Mono', 'Helvetica-Bold'. Default 'Helvetica-Bold'. Falls back to bold system font if not found."],
                                 "fontSize": ["type": "number", "description": "Font size in canvas points (default 96). On a 1080p canvas ~50 is a caption, ~120 is a title."],
                                 "color": ["type": "string", "description": "Hex '#RRGGBB' or '#RRGGBBAA' (default '#FFFFFF')"],
                                 "alignment": ["type": "string", "enum": ["left", "center", "right"], "description": "Text alignment (default 'center')"],
+                                "textPreset": ["type": "string", "enum": ["instagramLight", "instagramDark"], "description": "Complete Instagram text preset. Explicit style fields in the same entry override it."],
+                                "backgroundEnabled": ["type": "boolean", "description": "Rounded pill behind each visible line."],
+                                "backgroundColor": ["type": "string", "description": "Pill color. Implies enabled unless backgroundEnabled=false."],
+                                "strokeEnabled": ["type": "boolean", "description": "Toggle the glyph outline."],
+                                "strokeColor": ["type": "string", "description": "Glyph-outline color. Implies enabled unless strokeEnabled=false."],
+                                "strokeWidth": ["type": "number", "description": "Glyph-outline width as 0–20 percent of font size."],
                             ],
                             "required": ["startFrame", "durationFrames", "content"],
                         ],
@@ -408,9 +536,15 @@ enum ToolDefinitions {
                 properties: [
                     "clipIds": ["type": "array", "items": ["type": "string"], "description": "Optional. Audio/video clips to caption. Omit to auto-detect the primary spoken track."],
                     "language": ["type": "string", "description": "Optional BCP-47 language of the speech (e.g. 'es', 'ja', 'en-GB'). Defaults to the system language — set this when the footage is in another language, or transcription will be garbage."],
-                    "fontName": ["type": "string", "description": "Optional font PostScript or family name (default 'Helvetica-Bold'). Falls back to bold system font if not found."],
+                    "fontName": ["type": "string", "description": "Optional font PostScript or family name (default 'Helvetica-Bold'). Bundled Creator Connect fonts include 'Space Grotesk' and 'IBM Plex Mono'. Falls back to bold system font if not found."],
                     "fontSize": ["type": "number", "description": "Optional font size in canvas points (default 48)."],
                     "color": ["type": "string", "description": "Optional hex '#RRGGBB' or '#RRGGBBAA' (default white)."],
+                    "textPreset": ["type": "string", "enum": ["instagramLight", "instagramDark"], "description": "Optional complete Instagram text preset."],
+                    "backgroundEnabled": ["type": "boolean", "description": "Optional rounded pill toggle."],
+                    "backgroundColor": ["type": "string", "description": "Optional pill color; implies enabled unless backgroundEnabled=false."],
+                    "strokeEnabled": ["type": "boolean", "description": "Optional glyph-outline toggle."],
+                    "strokeColor": ["type": "string", "description": "Optional glyph-outline color."],
+                    "strokeWidth": ["type": "number", "description": "Optional glyph-outline width as 0–20 percent of font size."],
                     "centerX": ["type": "number", "description": "Optional horizontal center 0–1 (default 0.5)."],
                     "centerY": ["type": "number", "description": "Optional vertical center 0–1 (default 0.9, near the bottom)."],
                     "textCase": ["type": "string", "enum": ["auto", "upper", "lower"], "description": "Optional letter case (default auto)."],

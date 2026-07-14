@@ -80,6 +80,36 @@ struct ToolExecutorSmokeTests {
     }
 }
 
+@Suite("ToolExecutor — apply_effect")
+@MainActor
+struct ToolExecutorApplyEffectTests {
+
+    @Test func applyEffectSetsLumaKey() async throws {
+        let h = ToolHarness()
+        _ = h.editor.insertTrack(at: 0, type: .video)
+        let asset = h.addAsset(type: .video)
+        let clipId = h.editor.placeClip(asset: asset, trackIndex: 0, startFrame: 0, durationFrames: 60)[0]
+        try? await Task.sleep(for: .milliseconds(1))
+        var editNotifications = 0
+        h.editor.onDocumentEdited = { editNotifications += 1 }
+
+        let result = await h.runRaw("apply_effect", args: [
+            "clipIds": [clipId],
+            "effects": [[
+                "type": "key.luma",
+                "params": ["threshold": 0.9, "softness": 0.08],
+            ]],
+        ])
+
+        #expect(result.isError == false, "\(ToolHarness.textOf(result))")
+        let clip = try #require(h.editor.clipFor(id: clipId))
+        let effect = try #require(clip.effects?.first { $0.type == "key.luma" })
+        #expect(effect.params["threshold"]?.value == 0.9)
+        #expect(effect.params["softness"]?.value == 0.08)
+        #expect(editNotifications == 1)
+    }
+}
+
 @Suite("ToolExecutor — import_media")
 @MainActor
 struct ToolExecutorImportMediaTests {
@@ -200,7 +230,7 @@ struct ToolExecutorReadOnlyTests {
         #expect(clip?["startFrame"] as? Int == 0)
         #expect(clip?["durationFrames"] as? Int == 50)
         for defaulted in [
-            "mediaType", "sourceClipType", "speed", "volume", "opacity",
+            "mediaType", "sourceClipType", "speed", "volume", "opacity", "blendMode",
             "trimStartFrame", "trimEndFrame", "fadeInFrames", "fadeOutFrames",
             "fadeInInterpolation", "fadeOutInterpolation", "transform", "crop",
         ] {
@@ -328,6 +358,53 @@ struct ToolExecutorReadOnlyTests {
         let h = ToolHarness()
         let result = await h.runRaw("get_timeline", args: ["startFrame": 100, "endFrame": 50])
         #expect(result.isError)
+    }
+
+    @Test func getTimelineReportsMarkersAndWindowsThem() async throws {
+        var timeline = Fixtures.timeline(tracks: [
+            Fixtures.videoTrack(clips: [Fixtures.clip(start: 0, duration: 300)]),
+        ])
+        timeline.markers = [
+            TimelineMarker(id: "m1", frame: 25, label: "Intro"),
+            TimelineMarker(id: "m2", frame: 180, label: "Insert image", color: "#F29933"),
+        ]
+        let h = ToolHarness(timeline: timeline)
+
+        let full = try await h.runOK("get_timeline") as? [String: Any]
+        let markers = full?["markers"] as? [[String: Any]]
+        #expect(markers?.count == 2)
+        #expect(markers?.first?["label"] as? String == "Intro")
+
+        let windowed = try await h.runOK("get_timeline", args: ["startFrame": 100, "endFrame": 220]) as? [String: Any]
+        let visible = windowed?["markers"] as? [[String: Any]]
+        #expect(visible?.count == 1)
+        #expect(visible?.first?["id"] as? String == "m2")
+        #expect(windowed?["totalMarkers"] as? Int == 2)
+    }
+
+    @Test func getTimelineCompactsGeneratedBeatMarkersBySourceClip() async throws {
+        var timeline = Fixtures.timeline(tracks: [
+            Fixtures.audioTrack(clips: [Fixtures.clip(id: "song", mediaType: .audio, start: 0, duration: 300)]),
+        ])
+        timeline.markers = [
+            TimelineMarker(id: "manual", frame: 10, label: "Intro"),
+            TimelineMarker(id: "beat-1", frame: 30, kind: .beat, sourceClipId: "song", beatIndex: 1, strength: 0.9),
+            TimelineMarker(id: "beat-2", frame: 45, kind: .beat, sourceClipId: "song", beatIndex: 2, strength: 0.5),
+        ]
+        let h = ToolHarness(timeline: timeline)
+
+        let full = try await h.runOK("get_timeline") as? [String: Any]
+        #expect((full?["markers"] as? [[String: Any]])?.map { $0["id"] as? String } == ["manual"])
+        let group = (full?["beatMarkerGroups"] as? [[String: Any]])?.first
+        #expect(group?["sourceClipId"] as? String == "song")
+        #expect(group?["beatCount"] as? Int == 2)
+        #expect((group?["beats"] as? [[Any]])?.count == 2)
+
+        let windowed = try await h.runOK("get_timeline", args: ["startFrame": 40, "endFrame": 60]) as? [String: Any]
+        #expect(windowed?["markers"] == nil)
+        let windowedGroup = (windowed?["beatMarkerGroups"] as? [[String: Any]])?.first
+        #expect(windowedGroup?["windowBeatCount"] as? Int == 1)
+        #expect(windowed?["totalMarkers"] as? Int == 3)
     }
 
     private static func firstTrack(_ json: [String: Any]?) -> [String: Any]? {
@@ -459,6 +536,105 @@ struct ToolExecutorReadOnlyTests {
         for m in models ?? [] {
             #expect(m["type"] as? String == "image")
         }
+    }
+}
+
+@Suite("ToolExecutor — marker handlers")
+@MainActor
+struct ToolExecutorMarkerTests {
+    @Test func addingMarkerMarksDocumentEdited() {
+        let editor = EditorViewModel()
+        var editNotifications = 0
+        editor.onDocumentEdited = {
+            editNotifications += 1
+        }
+
+        _ = editor.addTimelineMarker(frame: 48, label: "Insert still")
+
+        #expect(editNotifications == 1)
+    }
+
+    @Test func documentEditNotificationFiresAgainWhileDocumentIsDirty() async {
+        let editor = EditorViewModel()
+        var editNotifications = 0
+        editor.onDocumentEdited = {
+            editNotifications += 1
+            editor.isDocumentEdited = true
+        }
+
+        _ = editor.addTimelineMarker(frame: 48, label: "First")
+        try? await Task.sleep(for: .milliseconds(1))
+        _ = editor.addTimelineMarker(frame: 96, label: "Second")
+
+        #expect(editNotifications == 2)
+    }
+
+    @Test func addMarkersCreatesTimelineAnchors() async throws {
+        let h = ToolHarness()
+        let json = try await h.runOK("add_markers", args: [
+            "entries": [
+                ["frame": 48, "label": "Insert still", "color": "#F29933"],
+                ["frame": 120],
+            ],
+        ]) as? [String: Any]
+
+        let out = json?["markers"] as? [[String: Any]]
+        #expect(out?.count == 2)
+        #expect(h.editor.timeline.markers.count == 2)
+        #expect(h.editor.timeline.markers[0].frame == 48)
+        #expect(h.editor.timeline.markers[0].label == "Insert still")
+        #expect(h.editor.timeline.markers[1].label == "Marker 2")
+    }
+
+    @Test func setMarkerPropertiesRenamesAndMovesMarker() async throws {
+        let h = ToolHarness()
+        let marker = h.editor.addTimelineMarker(frame: 10, label: "Draft")
+
+        _ = try await h.runOK("set_marker_properties", args: [
+            "markerIds": [marker.id],
+            "frame": 42,
+            "label": "Final insert",
+            "color": "88CCFF",
+        ])
+
+        let updated = try #require(h.editor.timelineMarker(id: marker.id))
+        #expect(updated.frame == 42)
+        #expect(updated.label == "Final insert")
+        #expect(updated.color == "#88CCFF")
+    }
+
+    @Test func removeMarkersDeletesOnlyMarkers() async throws {
+        let h = ToolHarness(timeline: Fixtures.timeline(tracks: [
+            Fixtures.videoTrack(clips: [Fixtures.clip(id: "clip-1", start: 0, duration: 30)]),
+        ]))
+        let first = h.editor.addTimelineMarker(frame: 10, label: "A")
+        let second = h.editor.addTimelineMarker(frame: 20, label: "B")
+
+        _ = try await h.runOK("remove_markers", args: ["markerIds": [first.id]])
+
+        #expect(h.editor.timeline.markers.map(\.id) == [second.id])
+        #expect(h.editor.timeline.tracks[0].clips[0].id == "clip-1")
+    }
+
+    @Test func removeMarkersBySourceClipPreservesManualAndOtherBeatMarkers() async throws {
+        let h = ToolHarness()
+        h.editor.timeline.markers = [
+            TimelineMarker(id: "manual", frame: 1, label: "Keep"),
+            TimelineMarker(id: "song-a-1", frame: 10, kind: .beat, sourceClipId: "song-a", beatIndex: 1),
+            TimelineMarker(id: "song-a-2", frame: 20, kind: .beat, sourceClipId: "song-a", beatIndex: 2),
+            TimelineMarker(id: "song-b-1", frame: 30, kind: .beat, sourceClipId: "song-b", beatIndex: 1),
+        ]
+
+        _ = try await h.runOK("remove_markers", args: ["sourceClipId": "song-a"])
+
+        #expect(h.editor.timeline.markers.map(\.id) == ["manual", "song-b-1"])
+    }
+
+    @Test func markerToolsRejectUnknownMarkerIds() async {
+        let h = ToolHarness()
+        let result = await h.runRaw("remove_markers", args: ["markerIds": ["missing"]])
+        #expect(result.isError)
+        #expect(ToolHarness.textOf(result).contains("Marker not found"))
     }
 }
 
@@ -1044,6 +1220,57 @@ struct ToolExecutorClipTests {
         #expect(ToolHarness.textOf(result).contains("text"))
     }
 
+    @Test func setClipPropertiesAppliesInstagramPresetAndStrokeToText() async throws {
+        let h = ToolHarness()
+        let addResult = await h.runRaw("add_texts", args: [
+            "entries": [[
+                "startFrame": 0,
+                "durationFrames": 60,
+                "content": "Caption",
+            ]]
+        ])
+        #expect(addResult.isError == false, "\(ToolHarness.textOf(addResult))")
+        let clipId = try #require(h.editor.timeline.tracks.first?.clips.first?.id)
+
+        let result = await h.runRaw("set_clip_properties", args: [
+            "clipIds": [clipId],
+            "textPreset": "instagramDark",
+            "strokeColor": "#00FF00",
+            "strokeWidth": 8.0,
+        ])
+
+        #expect(result.isError == false, "\(ToolHarness.textOf(result))")
+        let clip = try #require(h.editor.clipFor(id: clipId))
+        let style = try #require(clip.textStyle)
+        #expect(style.fontName == TextStyle.systemBoldFontName)
+        #expect(style.lineHeightMultiple == TextStyle.instagramLineHeightMultiple)
+        #expect(style.color == TextStyle.RGBA())
+        #expect(style.background.enabled)
+        #expect(style.background.color == TextStyle.RGBA(r: 0, g: 0, b: 0, a: 1))
+        #expect(style.shadow.enabled == false)
+        #expect(style.border.enabled)
+        #expect(style.border.color == TextStyle.RGBA(r: 0, g: 1, b: 0, a: 1))
+        #expect(style.border.width == 8)
+    }
+
+    @Test func setClipPropertiesRejectsInstagramPresetAndStrokeOnVideo() async throws {
+        let (h, asset) = await setupWithVideoTrack()
+        let clipId = await addedClip(in: h, asset: asset)
+        let result = await h.runRaw("set_clip_properties", args: [
+            "clipIds": [clipId],
+            "textPreset": "instagramLight",
+            "strokeColor": "#FFFFFF",
+            "strokeWidth": 4.0,
+        ])
+
+        #expect(result.isError)
+        let message = ToolHarness.textOf(result)
+        #expect(message.contains("textPreset"))
+        #expect(message.contains("strokeColor"))
+        #expect(message.contains("strokeWidth"))
+        #expect(h.editor.timeline.tracks[0].clips[0].textStyle == nil)
+    }
+
     @Test func setClipPropertiesRejectsEmptyClipIds() async throws {
         let h = ToolHarness()
         let result = await h.runRaw("set_clip_properties", args: ["clipIds": [], "speed": 2.0])
@@ -1295,6 +1522,85 @@ struct ToolExecutorTextFolderTests {
         let clip = h.editor.timeline.tracks[0].clips[0]
         #expect(clip.textContent == "Caption")
         #expect(clip.textStyle?.fontSize == 48)
+    }
+
+    @Test func addTextsAcceptsCreatorConnectFontName() async throws {
+        let h = ToolHarness()
+        _ = h.editor.insertTrack(at: 0, type: .video)
+        let result = await h.runRaw("add_texts", args: [
+            "entries": [[
+                "trackIndex": 0,
+                "startFrame": 0,
+                "durationFrames": 60,
+                "content": "Creator Connect",
+                "fontName": "Space Grotesk",
+            ]]
+        ])
+        #expect(result.isError == false, "\(ToolHarness.textOf(result))")
+        #expect(h.editor.timeline.tracks[0].clips[0].textStyle?.fontName == "Space Grotesk")
+    }
+
+    @Test func addTextsTrackGroupsCreateLayeredTracksAndShareStages() async throws {
+        let h = ToolHarness()
+        let result = await h.runRaw("add_texts", args: [
+            "entries": [
+                ["trackGroup": "first-line", "startFrame": 0, "durationFrames": 30, "content": "Here's"],
+                ["trackGroup": "first-line", "startFrame": 30, "durationFrames": 30, "content": "Here's how"],
+                ["trackGroup": "second-line", "startFrame": 0, "durationFrames": 60, "content": "we built"],
+            ]
+        ])
+
+        #expect(result.isError == false, "\(ToolHarness.textOf(result))")
+        #expect(h.editor.timeline.tracks.count == 2)
+
+        let firstLine = h.editor.timeline.tracks[0]
+        let secondLine = h.editor.timeline.tracks[1]
+        #expect(firstLine.clips.map(\.textContent) == ["Here's", "Here's how"])
+        #expect(firstLine.clips.map(\.startFrame) == [0, 30])
+        #expect(secondLine.clips.map(\.textContent) == ["we built"])
+        #expect(secondLine.clips[0].startFrame == 0)
+        #expect(secondLine.clips[0].durationFrames == 60)
+    }
+
+    @Test func addTextsRejectsMixedTrackGroupUsageWithoutMutatingTimeline() async throws {
+        let h = ToolHarness()
+        let result = await h.runRaw("add_texts", args: [
+            "entries": [
+                ["trackGroup": "first-line", "startFrame": 0, "durationFrames": 30, "content": "One"],
+                ["startFrame": 0, "durationFrames": 30, "content": "Two"],
+            ]
+        ])
+
+        #expect(result.isError)
+        #expect(ToolHarness.textOf(result).contains("Mixed trackGroup"))
+        #expect(h.editor.timeline.tracks.isEmpty)
+    }
+
+    @Test func addTextsAppliesInstagramPresetAndStroke() async throws {
+        let h = ToolHarness()
+        let result = await h.runRaw("add_texts", args: [
+            "entries": [[
+                "startFrame": 0,
+                "durationFrames": 60,
+                "content": "Premium captions",
+                "textPreset": "instagramLight",
+                "strokeColor": "#FF0000",
+                "strokeWidth": 6.0,
+            ]]
+        ])
+
+        #expect(result.isError == false, "\(ToolHarness.textOf(result))")
+        let clip = try #require(h.editor.timeline.tracks.first?.clips.first)
+        let style = try #require(clip.textStyle)
+        #expect(style.fontName == TextStyle.systemBoldFontName)
+        #expect(style.lineHeightMultiple == TextStyle.instagramLineHeightMultiple)
+        #expect(style.color == TextStyle.RGBA(r: 0, g: 0, b: 0, a: 1))
+        #expect(style.background.enabled)
+        #expect(style.background.color == TextStyle.RGBA())
+        #expect(style.shadow.enabled == false)
+        #expect(style.border.enabled)
+        #expect(style.border.color == TextStyle.RGBA(r: 1, g: 0, b: 0, a: 1))
+        #expect(style.border.width == 6)
     }
 
     @Test func addTextsRejectsAudioTargetTrack() async throws {
@@ -1691,5 +1997,43 @@ struct SetClipPropertiesTests {
         let updated = h.editor.timeline.tracks[0].clips[0]
         // Bug: Transform(center:width:height:) defaults rotation to 0, discarding cur.rotation.
         #expect(updated.transform.rotation == 45.0)
+    }
+
+    @Test func setsBlendModeAndGetTimelineReportsIt() async throws {
+        let h = ToolHarness(timeline: Fixtures.timeline(tracks: [
+            Fixtures.videoTrack(clips: [Fixtures.clip(id: "c1", start: 0, duration: 60)]),
+        ]))
+        var editNotifications = 0
+        h.editor.onDocumentEdited = {
+            editNotifications += 1
+        }
+
+        let result = await h.runRaw("set_clip_properties", args: [
+            "clipIds": ["c1"],
+            "blendMode": "Difference",
+        ])
+
+        #expect(result.isError == false)
+        #expect(editNotifications == 1)
+        #expect(h.editor.timeline.tracks[0].clips[0].blendMode == .difference)
+
+        let json = try await h.runOK("get_timeline") as? [String: Any]
+        let tracks = json?["tracks"] as? [[String: Any]]
+        let clip = (tracks?.first?["clips"] as? [[String: Any]])?.first
+        #expect(clip?["blendMode"] as? String == "difference")
+    }
+
+    @Test func rejectsBlendModeOnAudioClip() async {
+        let h = ToolHarness(timeline: Fixtures.timeline(tracks: [
+            Fixtures.audioTrack(clips: [Fixtures.clip(id: "a1", mediaType: .audio, start: 0, duration: 60)]),
+        ]))
+
+        let result = await h.runRaw("set_clip_properties", args: [
+            "clipIds": ["a1"],
+            "blendMode": "difference",
+        ])
+
+        #expect(result.isError)
+        #expect(ToolHarness.textOf(result).contains("video/image"))
     }
 }

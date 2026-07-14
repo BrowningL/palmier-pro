@@ -64,28 +64,42 @@ fileprivate struct SetClipPropertiesInput: DecodableToolArgs {
     let trimEndFrame: Int?
     let speed: Double?
     let volume: Double?
+    let voiceCleanupEnabled: Bool?
+    let voiceCleanupStrength: Double?
     let opacity: Double?
+    let blendMode: String?
     let transform: ParsedTransform?
     let content: String?
     let fontName: String?
     let fontSize: Double?
     let color: String?
     let alignment: String?
+    let textPreset: String?
+    let backgroundEnabled: Bool?
+    let backgroundColor: String?
+    let strokeEnabled: Bool?
+    let strokeColor: String?
+    let strokeWidth: Double?
 
     static let allowedKeys: Set<String> = [
         "clipIds",
         "durationFrames", "trimStartFrame", "trimEndFrame", "speed",
-        "volume", "opacity",
+        "volume", "voiceCleanupEnabled", "voiceCleanupStrength", "opacity", "blendMode",
         "transform",
         "content", "fontName", "fontSize", "color", "alignment",
+        "textPreset", "backgroundEnabled", "backgroundColor",
+        "strokeEnabled", "strokeColor", "strokeWidth",
     ]
 
     var hasAnyProperty: Bool {
         durationFrames != nil || trimStartFrame != nil || trimEndFrame != nil
-            || speed != nil || volume != nil || opacity != nil
+            || speed != nil || volume != nil || voiceCleanupEnabled != nil
+            || voiceCleanupStrength != nil || opacity != nil || blendMode != nil
             || transform != nil
             || content != nil || fontName != nil || fontSize != nil
             || color != nil || alignment != nil
+            || textPreset != nil || backgroundEnabled != nil || backgroundColor != nil
+            || strokeEnabled != nil || strokeColor != nil || strokeWidth != nil
     }
 }
 
@@ -442,7 +456,10 @@ extension ToolExecutor {
 
     // MARK: set_clip_properties
 
-    private static let textOnlyKeys: Set<String> = ["content", "fontName", "fontSize", "color", "alignment"]
+    private static let textOnlyKeys: Set<String> = [
+        "content", "fontName", "fontSize", "color", "alignment", "textPreset",
+        "backgroundEnabled", "backgroundColor", "strokeEnabled", "strokeColor", "strokeWidth",
+    ]
 
     func setClipProperties(_ editor: EditorViewModel, _ args: [String: Any]) throws -> ToolResult {
         let input: SetClipPropertiesInput = try decodeToolArgs(args, path: "set_clip_properties")
@@ -459,6 +476,12 @@ extension ToolExecutor {
         if let v = input.volume, !(0...1).contains(v) {
             throw ToolError("volume must be between 0 and 1 (got \(v))")
         }
+        if let v = input.voiceCleanupStrength, !(0...1).contains(v) {
+            throw ToolError("voiceCleanupStrength must be between 0 and 1 (got \(v))")
+        }
+        if input.voiceCleanupEnabled == false, input.voiceCleanupStrength != nil {
+            throw ToolError("voiceCleanupStrength cannot be combined with voiceCleanupEnabled=false")
+        }
         if let o = input.opacity, !(0...1).contains(o) {
             throw ToolError("opacity must be between 0 and 1 (got \(o))")
         }
@@ -469,7 +492,12 @@ extension ToolExecutor {
             throw ToolError("trimEndFrame must be >= 0 (got \(t))")
         }
         let color = try parseColorHex(input.color, path: "set_clip_properties")
+        let backgroundColor = try parseColorHex(input.backgroundColor, path: "set_clip_properties")
+        let strokeColor = try parseColorHex(input.strokeColor, path: "set_clip_properties")
+        let strokeWidth = try parseStrokeWidth(input.strokeWidth, path: "set_clip_properties")
+        let textPreset = try parseTextPreset(input.textPreset, path: "set_clip_properties")
         let alignment = try parseAlignment(input.alignment, path: "set_clip_properties")
+        let blendMode = try Self.parseBlendMode(input.blendMode, path: "set_clip_properties.blendMode")
 
         // Resolve clipIds + collect types so we can reject text-only fields on non-text clips.
         var clipTypes: [String: ClipType] = [:]
@@ -483,11 +511,29 @@ extension ToolExecutor {
             input.fontSize  != nil ? "fontSize"  : nil,
             input.color     != nil ? "color"     : nil,
             input.alignment != nil ? "alignment" : nil,
+            input.textPreset != nil ? "textPreset" : nil,
+            input.backgroundEnabled != nil ? "backgroundEnabled" : nil,
+            input.backgroundColor != nil ? "backgroundColor" : nil,
+            input.strokeEnabled != nil ? "strokeEnabled" : nil,
+            input.strokeColor != nil ? "strokeColor" : nil,
+            input.strokeWidth != nil ? "strokeWidth" : nil,
         ].compactMap { $0 }
         if !textOnlyUsed.isEmpty {
             let nonText = clipTypes.filter { $0.value != .text }.map { $0.key }.sorted()
             if !nonText.isEmpty {
                 throw ToolError("text-only fields '\(textOnlyUsed.joined(separator: "', '"))' rejected on non-text clips: \(nonText.joined(separator: ", "))")
+            }
+        }
+        if blendMode != nil {
+            let nonVisual = clipTypes.filter { !($0.value == .video || $0.value == .image) }.map { $0.key }.sorted()
+            if !nonVisual.isEmpty {
+                throw ToolError("blendMode applies only to video/image clips; rejected on: \(nonVisual.joined(separator: ", "))")
+            }
+        }
+        if input.voiceCleanupEnabled != nil || input.voiceCleanupStrength != nil {
+            let nonAudio = clipTypes.filter { $0.value != .audio }.map { $0.key }.sorted()
+            if !nonAudio.isEmpty {
+                throw ToolError("voice cleanup applies only to audio clips; rejected on: \(nonAudio.joined(separator: ", "))")
             }
         }
 
@@ -510,18 +556,30 @@ extension ToolExecutor {
                     trimEndFrame: input.trimEndFrame,
                     speed: input.speed,
                     volume: input.volume,
+                    voiceCleanupEnabled: input.voiceCleanupEnabled,
+                    voiceCleanupStrength: input.voiceCleanupStrength,
                     opacity: input.opacity,
+                    blendMode: blendMode,
                     transform: input.transform,
                     content: isText ? input.content : nil,
                     fontName: isText ? input.fontName : nil,
                     fontSize: isText ? input.fontSize : nil,
                     color: isText ? color : nil,
                     alignment: isText ? alignment : nil,
+                    textPreset: isText ? textPreset : nil,
+                    backgroundEnabled: isText ? input.backgroundEnabled : nil,
+                    backgroundColor: isText ? backgroundColor : nil,
+                    strokeEnabled: isText ? input.strokeEnabled : nil,
+                    strokeColor: isText ? strokeColor : nil,
+                    strokeWidth: isText ? strokeWidth : nil,
                     clipId: id,
                     editor: editor
                 )
                 // Match the inspector: refit bbox after content/font change when caller didn't set a box.
-                if isText && input.transform == nil && (input.content != nil || input.fontName != nil || input.fontSize != nil) {
+                if isText && input.transform == nil
+                    && (input.content != nil || input.fontName != nil || input.fontSize != nil
+                        || input.textPreset != nil || input.backgroundEnabled != nil || input.backgroundColor != nil
+                        || input.strokeEnabled != nil || input.strokeColor != nil || input.strokeWidth != nil) {
                     editor.fitTextClipToContent(clipId: id)
                 }
                 summaries.append("\(id)\(changed.isEmpty ? " (no-op)" : ": \(changed.joined(separator: ", "))")")
@@ -534,8 +592,11 @@ extension ToolExecutor {
                     trimStartFrame: partnerIsText ? nil : input.trimStartFrame,
                     trimEndFrame:   partnerIsText ? nil : input.trimEndFrame,
                     speed:          partnerIsText ? nil : input.speed,
-                    volume: nil, opacity: nil, transform: nil,
+                    volume: nil, voiceCleanupEnabled: nil, voiceCleanupStrength: nil,
+                    opacity: nil, blendMode: nil, transform: nil,
                     content: nil, fontName: nil, fontSize: nil, color: nil, alignment: nil,
+                    textPreset: nil, backgroundEnabled: nil, backgroundColor: nil,
+                    strokeEnabled: nil, strokeColor: nil, strokeWidth: nil,
                     clipId: partnerId,
                     editor: editor
                 )
@@ -553,13 +614,22 @@ extension ToolExecutor {
         trimEndFrame: Int?,
         speed: Double?,
         volume: Double?,
+        voiceCleanupEnabled: Bool?,
+        voiceCleanupStrength: Double?,
         opacity: Double?,
+        blendMode: ClipBlendMode?,
         transform: ParsedTransform?,
         content: String?,
         fontName: String?,
         fontSize: Double?,
         color: TextStyle.RGBA?,
         alignment: TextStyle.Alignment?,
+        textPreset: TextStyle.Preset?,
+        backgroundEnabled: Bool?,
+        backgroundColor: TextStyle.RGBA?,
+        strokeEnabled: Bool?,
+        strokeColor: TextStyle.RGBA?,
+        strokeWidth: Double?,
         clipId: String,
         editor: EditorViewModel
     ) -> [String] {
@@ -586,7 +656,19 @@ extension ToolExecutor {
             }
             // Setting a scalar clears any existing keyframe track on the same property.
             if let v = volume         { clip.volume  = v; clip.volumeTrack  = nil; changed.append("volume") }
+            if voiceCleanupEnabled == false {
+                clip.voiceCleanup = nil
+                changed.append("voiceCleanupEnabled")
+            } else if voiceCleanupEnabled == true || voiceCleanupStrength != nil {
+                let strength = voiceCleanupStrength
+                    ?? clip.voiceCleanup?.normalizedStrength
+                    ?? VoiceCleanupSettings.defaultStrength
+                clip.voiceCleanup = VoiceCleanupSettings(strength: strength)
+                if voiceCleanupEnabled != nil { changed.append("voiceCleanupEnabled") }
+                if voiceCleanupStrength != nil { changed.append("voiceCleanupStrength") }
+            }
             if let v = opacity        { clip.opacity = v; clip.opacityTrack = nil; changed.append("opacity") }
+            if let v = blendMode      { clip.blendMode = v; changed.append("blendMode") }
             if let t = transform {
                 let cur = clip.transform
                 var next = Transform(
@@ -600,17 +682,54 @@ extension ToolExecutor {
                 clip.transform = next
                 changed.append("transform")
             }
-            if content != nil || fontName != nil || fontSize != nil || color != nil || alignment != nil {
+            if content != nil || fontName != nil || fontSize != nil || color != nil || alignment != nil
+                || textPreset != nil || backgroundEnabled != nil || backgroundColor != nil
+                || strokeEnabled != nil || strokeColor != nil || strokeWidth != nil {
                 if let c = content { clip.textContent = c; changed.append("content") }
                 var style = clip.textStyle ?? TextStyle()
+                if let preset = textPreset { style.apply(preset); changed.append("textPreset") }
                 if let f = fontName  { style.fontName = f; changed.append("fontName") }
                 if let s = fontSize  { style.fontSize = s; changed.append("fontSize") }
                 if let c = color     { style.color = c; changed.append("color") }
                 if let a = alignment { style.alignment = a; changed.append("alignment") }
+                if let c = backgroundColor {
+                    style.background.color = c
+                    style.background.enabled = true
+                    changed.append("backgroundColor")
+                }
+                if let enabled = backgroundEnabled {
+                    style.background.enabled = enabled
+                    changed.append("backgroundEnabled")
+                }
+                if let c = strokeColor {
+                    style.border.color = c
+                    style.border.enabled = true
+                    changed.append("strokeColor")
+                }
+                if let width = strokeWidth {
+                    style.border.width = width
+                    style.border.enabled = width > 0
+                    changed.append("strokeWidth")
+                }
+                if let enabled = strokeEnabled {
+                    style.border.enabled = enabled
+                    changed.append("strokeEnabled")
+                }
+                if style.background.enabled { style.shadow.enabled = false }
                 clip.textStyle = style
             }
         }
         return changed
+    }
+
+    fileprivate static func parseBlendMode(_ raw: String?, path: String) throws -> ClipBlendMode? {
+        guard let raw else { return nil }
+        let normalized = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard let mode = ClipBlendMode(rawValue: normalized) else {
+            let valid = ClipBlendMode.allCases.map(\.rawValue).joined(separator: ", ")
+            throw ToolError("\(path): unknown blend mode '\(raw)'. Expected one of: \(valid)")
+        }
+        return mode
     }
 
     // MARK: set_keyframes

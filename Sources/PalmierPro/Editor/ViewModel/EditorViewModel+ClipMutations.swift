@@ -246,6 +246,7 @@ extension EditorViewModel {
             vm.registerTimelineSwap(undoState: redoState, redoState: undoState, actionName: actionName)
         }
         undoManager?.setActionName(actionName)
+        markDocumentEdited()
     }
 
     /// Run `work` as a single atomic mutation, registering one timeline-swap undo
@@ -330,6 +331,7 @@ extension EditorViewModel {
             vm.notifyTimelineChanged()
         }
         undoManager?.setActionName(actionName)
+        markDocumentEdited()
     }
 
     func applyClipProperty(clipId: String, rebuild: Bool = false, _ modify: (inout Clip) -> Void) {
@@ -487,6 +489,7 @@ extension EditorViewModel {
             }
         }
         undoManager?.setActionName("Change Clip Property")
+        markDocumentEdited()
     }
 
     /// Flag the selected clip (and any linked clips sharing its `mediaRef`)

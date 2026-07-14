@@ -24,6 +24,7 @@ extension ToolExecutor {
     private static let getTimelineAllowedKeys: Set<String> = ["startFrame", "endFrame"]
     private static let captionRowLimit = 200
     private static let captionRowFormat = ["clipId", "startFrame", "durationFrames", "text"]
+    private static let beatMarkerRowLimit = 500
 
     func getTimeline(_ editor: EditorViewModel, _ args: [String: Any]) throws -> ToolResult {
         try validateUnknownKeys(args, allowed: Self.getTimelineAllowedKeys, path: "get_timeline")
@@ -37,8 +38,10 @@ extension ToolExecutor {
             window = s..<e
         }
 
+        var reportedTimeline = editor.timeline
+        reportedTimeline.markers = editor.timeline.activeMarkers
         guard var dict = try? JSONSerialization.jsonObject(
-            with: JSONEncoder().encode(editor.timeline)
+            with: JSONEncoder().encode(reportedTimeline)
         ) as? [String: Any] else { throw ToolError("Failed to encode timeline") }
         if var tracks = dict["tracks"] as? [[String: Any]] {
             for i in tracks.indices {
@@ -47,6 +50,58 @@ extension ToolExecutor {
                 tracks[i]["label"] = editor.timelineTrackDisplayLabel(at: i)
             }
             dict["tracks"] = tracks
+        }
+        if let markers = dict["markers"] as? [[String: Any]], !markers.isEmpty {
+            let sortedMarkers = markers.sorted { Self.intValue($0["frame"]) < Self.intValue($1["frame"]) }
+            let manualMarkers = sortedMarkers.filter { ($0["kind"] as? String) != TimelineMarker.Kind.beat.rawValue }
+            let beatMarkers = sortedMarkers.filter { ($0["kind"] as? String) == TimelineMarker.Kind.beat.rawValue }
+            let visibleManual = Self.markers(manualMarkers, in: window)
+            if visibleManual.isEmpty {
+                dict.removeValue(forKey: "markers")
+            } else {
+                dict["markers"] = visibleManual
+            }
+
+            let groupedBeats = Dictionary(grouping: beatMarkers) {
+                ($0["sourceClipId"] as? String) ?? "unknown"
+            }
+            let beatGroups: [[String: Any]] = groupedBeats.keys.sorted().compactMap { sourceClipId in
+                guard let all = groupedBeats[sourceClipId] else { return nil }
+                let allInWindow = Self.markers(all, in: window)
+                guard !allInWindow.isEmpty else { return nil }
+                let visible = Array(allInWindow.prefix(Self.beatMarkerRowLimit))
+                var group: [String: Any] = [
+                    "sourceClipId": sourceClipId,
+                    "beatCount": all.count,
+                    "beatFormat": ["frame", "beatIndex", "strength"],
+                    "beats": visible.map {
+                        [
+                            Self.intValue($0["frame"]),
+                            Self.intValue($0["beatIndex"]),
+                            ($0["strength"] as? NSNumber)?.doubleValue ?? 0,
+                        ] as [Any]
+                    },
+                ]
+                if allInWindow.count < all.count { group["windowBeatCount"] = allInWindow.count }
+                if visible.count < allInWindow.count, let last = visible.last {
+                    group["returnedBeatCount"] = visible.count
+                    group["nextStartFrame"] = Self.intValue(last["frame"]) + 1
+                    group["outputNote"] = "Continue get_timeline with startFrame=nextStartFrame; beat rows are capped at \(Self.beatMarkerRowLimit)."
+                }
+                return group
+            }
+            if beatGroups.isEmpty {
+                dict.removeValue(forKey: "beatMarkerGroups")
+            } else {
+                dict["beatMarkerGroups"] = beatGroups
+            }
+
+            let visibleCount = visibleManual.count + beatGroups.reduce(0) {
+                $0 + (($1["beats"] as? [Any])?.count ?? 0)
+            }
+            if visibleCount < sortedMarkers.count { dict["totalMarkers"] = sortedMarkers.count }
+        } else {
+            dict.removeValue(forKey: "markers")
         }
         dict["totalFrames"] = editor.timeline.totalFrames
         if let window {
@@ -58,6 +113,17 @@ extension ToolExecutor {
             throw ToolError("Failed to encode timeline")
         }
         return .ok(json)
+    }
+
+    private static func markers(
+        _ markers: [[String: Any]],
+        in window: Range<Int>?
+    ) -> [[String: Any]] {
+        guard let window else { return markers }
+        return markers.filter { marker in
+            let frame = intValue(marker["frame"])
+            return frame >= window.lowerBound && frame < window.upperBound
+        }
     }
 
     private static let trackDefaults: [String: Any] = ["muted": false, "hidden": false, "syncLocked": true]

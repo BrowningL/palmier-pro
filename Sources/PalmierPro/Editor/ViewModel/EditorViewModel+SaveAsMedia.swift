@@ -33,11 +33,21 @@ extension EditorViewModel {
         let durationFrames = clip.durationFrames
         let speed = clip.speed
         let mediaType = clip.mediaType
+        let voiceCleanup = clip.voiceCleanup
 
         Task { @MainActor [weak self] in
             do {
+                let exportSourceURL: URL
+                if mediaType == .audio, let voiceCleanup {
+                    exportSourceURL = try await VoiceCleanupCache.shared.processedURL(
+                        sourceURL: sourceURL,
+                        strength: voiceCleanup.normalizedStrength
+                    )
+                } else {
+                    exportSourceURL = sourceURL
+                }
                 try await Self.exportClipRange(
-                    sourceURL: sourceURL,
+                    sourceURL: exportSourceURL,
                     destURL: destURL,
                     fps: fps,
                     trimStartFrame: trimStartFrame,

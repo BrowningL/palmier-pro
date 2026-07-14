@@ -8,7 +8,7 @@ enum SnapEngine {
     struct SnapTarget {
         let frame: Int
         let kind: Kind
-        enum Kind { case playhead, clipEdge }
+        enum Kind { case playhead, marker, clipEdge }
     }
 
     struct SnapResult {
@@ -30,13 +30,36 @@ enum SnapEngine {
     /// Pass `includePlayhead: true` when the playhead itself is NOT what's being moved.
     static func collectTargets(
         tracks: [Track],
+        markers: [TimelineMarker] = [],
         playheadFrame: Int = 0,
         excludeClipIds: Set<String> = [],
-        includePlayhead: Bool = false
+        includePlayhead: Bool = false,
+        markerPixelsPerFrame: Double? = nil
     ) -> [SnapTarget] {
         var targets: [SnapTarget] = []
         if includePlayhead {
             targets.append(SnapTarget(frame: playheadFrame, kind: .playhead))
+        }
+        let eligibleMarkers = markers.filter { marker in
+            if marker.kind == .beat,
+               let sourceClipId = marker.sourceClipId,
+               excludeClipIds.contains(sourceClipId) {
+                return false
+            }
+            return true
+        }.sorted { $0.frame < $1.frame }
+        let minimumBeatSpacingFrames = markerPixelsPerFrame.map {
+            max(1, Int(ceil(12 / max($0, 0.0001))))
+        } ?? 1
+        var lastBeatFrame: Int?
+        for marker in eligibleMarkers {
+            if marker.kind == .beat,
+               let lastBeatFrame,
+               marker.frame - lastBeatFrame < minimumBeatSpacingFrames {
+                continue
+            }
+            targets.append(SnapTarget(frame: marker.frame, kind: .marker))
+            if marker.kind == .beat { lastBeatFrame = marker.frame }
         }
         for track in tracks {
             for clip in track.clips where !excludeClipIds.contains(clip.id) {
@@ -80,7 +103,7 @@ enum SnapEngine {
             for target in targets {
                 let threshold: Double = switch target.kind {
                 case .playhead: baseFrameThreshold * Snap.playheadMultiplier
-                case .clipEdge: baseFrameThreshold
+                case .marker, .clipEdge: baseFrameThreshold
                 }
                 let dist = abs(Double(probePos - target.frame))
                 if dist <= threshold, dist < (best?.distance ?? .infinity) {

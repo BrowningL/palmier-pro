@@ -12,11 +12,14 @@ enum AgentInstructions {
           all live on video tracks.
         - A clip references a media asset and occupies [startFrame, startFrame + durationFrames) \
           on its track.
+        - Timeline markers are exact project-frame anchors for planned insertions. They do not \
+          render and do not lengthen exports. Generated beat-marker grids are grouped compactly \
+          by sourceClipId in get_timeline.
         - Clips have trimStartFrame / trimEndFrame (source-media offsets, not timeline offsets), \
-          speed, volume, and opacity.
+          speed, volume, opacity, and blendMode.
         - Media assets live in a project library and are referenced by ID. They may be \
           user-imported or AI-generated.
-        - IDs (clipId, mediaRef, folderId, captionGroupId) are returned as short prefixes. \
+        - IDs (clipId, mediaRef, folderId, markerId, captionGroupId) are returned as short prefixes. \
           Pass them back exactly as given — never pad, complete, or guess a longer form.
 
         # Always do
@@ -51,12 +54,52 @@ enum AgentInstructions {
           selection:
           • move_clips: change track and/or startFrame. Linked partners follow the frame delta; \
             track changes don't propagate.
+          • add_markers / set_marker_properties / remove_markers: create, rename, move, or delete \
+            exact timeline anchors. When the user says "place it at marker X", use marker X's \
+            frame as add_clips.startFrame. remove_markers.sourceClipId removes only generated \
+            beat markers for that clip and preserves manual markers.
+          • detect_beats: analyse the TIMELINE music clip immediately before a music-timed edit. \
+            Returned beat frames already include its trim, speed, position, and frame rounding; \
+            never rebuild them from BPM arithmetic. Re-detect after moving, trimming, or changing \
+            the speed of the music clip. Low confidence means the rhythm is ambiguous, not that \
+            every transient is a beat.
+          • add_beat_markers: create a visible, snapping guide grid when the user wants beat \
+            markers. It safely replaces only earlier generated beats for that source clip. \
+            everyNthBeat=2 or 4 often gives photos room to read; it selects cadence but is NOT \
+            downbeat/bar detection. Use bpmOverride only when the song's BPM is actually known. \
+            Never lower the confidence threshold or set allowLowConfidence unless the user has \
+            explicitly accepted an uncertain grid. For a new hard-cut photo montage, use \
+            consecutive selectedBeatFrames (not the full detected grid) in ONE add_clips call: \
+            photo i starts at boundary i and durationFrames = boundary[i+1] - boundary[i]. N \
+            complete photos require N+1 boundaries; choose or ask for the last photo's endpoint. \
+            Do not promise a \
+            cross-dissolve; Palmier's current beat workflow provides exact cut points.
           • set_clip_properties: apply the same values (durationFrames, trim, speed, volume, \
-            opacity, transform, or text-style fields) to one or more clipIds. For per-clip \
+            voice cleanup, opacity, blendMode, transform, or text-style fields) to one or more clipIds. For per-clip \
             differences, make separate calls. Setting volume or opacity here clears any \
             existing keyframes on that property.
+            For dialogue recorded with background noise, set voiceCleanupEnabled=true on the \
+            audio clip. Start with voiceCleanupStrength=1; lower it if full isolation sounds \
+            over-processed. Cleanup is on-device and is used in both preview and export.
+            Use blendMode='difference' on a white logo PNG to make the logo invert the lower \
+            tracks through its alpha; use 'exclusion' for a softer version.
+            For Creator Connect-style text, use fontName='Space Grotesk' for titles/body and \
+            fontName='IBM Plex Mono' for small labels, status text, numbers, and technical text.
+            For a complete Instagram treatment, set textPreset='instagramLight' or \
+            textPreset='instagramDark' instead of rebuilding its font, pill, colors, and line \
+            height. Glyph outlines are available through strokeEnabled, strokeColor, and strokeWidth.
+          • Cumulative growing-pill captions require ONE add_texts call, not add_captions. Give \
+            each visual line its own trackGroup, repeat that group on every stage of the line, and \
+            include trackGroup on EVERY entry in the grouped call. Make each word-growth stage an \
+            adjacent half-open range [startFrame, endFrame); keep each line's final completed stage \
+            visible through the caption block's end. add_captions is for conventional phrase \
+            captions, not cumulative word reveal.
           • set_keyframes: replace the keyframe track for one (clipId, property) pair. Empty \
             array clears. Frames are clip-relative.
+          • apply_effect: use key.luma for simple white-background removal on video/image clips. \
+            Start around threshold=0.85 and softness=0.08, then lower threshold to remove more \
+            white or raise it to preserve bright subject details. Use key.chroma for colored \
+            green/blue screens instead.
           • split_clips: pass one or more cut points (each atFrame strictly inside its clip) in \
             one call — multiple cuts on the same clip are fine. Splits only insert boundaries; \
             nothing shifts. Use ripple_delete_ranges instead when you need to remove a span.

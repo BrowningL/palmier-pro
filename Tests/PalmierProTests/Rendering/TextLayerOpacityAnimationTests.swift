@@ -7,14 +7,14 @@ import Testing
 @MainActor
 struct TextLayerOpacityAnimationTests {
 
-    private func animation(for clip: Clip, fps: Int = 30) -> (anim: CAKeyframeAnimation?, layer: CATextLayer?) {
+    private func animation(for clip: Clip, fps: Int = 30) -> (anim: CAKeyframeAnimation?, layer: TextClipLayer?) {
         let track = Fixtures.videoTrack(clips: [clip])
         let timeline = Fixtures.timeline(fps: fps, tracks: [track])
         let (parent, videoLayer) = TextLayerController.buildForExport(
             timeline: timeline, fps: fps, renderSize: CGSize(width: 1920, height: 1080)
         )
         _ = videoLayer
-        let textLayer = parent.sublayers?.dropFirst().first as? CATextLayer
+        let textLayer = parent.sublayers?.dropFirst().first as? TextClipLayer
         let anim = textLayer?.animation(forKey: "opacity") as? CAKeyframeAnimation
         return (anim, textLayer)
     }
@@ -78,13 +78,14 @@ struct TextLayerOpacityAnimationTests {
         // Timeline is exactly the clip length here so no post-clip frames.
     }
 
-    @Test func appliesBorderStyleToTextLayer() {
+    @Test func appliesGlyphStrokeWithoutLayerBorder() {
         var clip = textClip(start: 0, duration: 30)
         var style = TextStyle()
         style.border.enabled = true
         clip.textStyle = style
         let (_, layer) = animation(for: clip)
-        #expect(layer?.borderColor != nil)
-        #expect(layer?.borderWidth == AppTheme.BorderWidth.thin)
+        #expect(layer?.borderColor == nil)
+        #expect(layer?.borderWidth == 0)
+        #expect(layer?.glyphs.contents != nil)
     }
 }

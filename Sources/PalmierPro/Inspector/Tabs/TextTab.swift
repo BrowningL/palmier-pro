@@ -12,13 +12,23 @@ struct TextTab: View {
             InspectorSection("Typography") {
                 fontRow
                 sizeSlider
+                lineHeightRow
             }
             InspectorSection("Appearance") {
                 colorRow
                 opacitySlider
-                backgroundRow
-                borderRow
+                strokeRow
+                if style.border.enabled { strokeWidthRow }
                 shadowRow
+            }
+            InspectorSection("Background") {
+                backgroundToggleRow
+                if style.background.enabled {
+                    backgroundPaddingHRow
+                    backgroundPaddingVRow
+                    backgroundCornerRow
+                }
+                backgroundPresetRow
             }
             InspectorSection("Layout") {
                 alignmentRow
@@ -91,6 +101,26 @@ struct TextTab: View {
         }
     }
 
+    private var lineHeightRow: some View {
+        InspectorRow(icon: "arrow.up.and.down.text.horizontal", label: "Line Height") {
+            ScrubbableNumberField(
+                value: style.lineHeightMultiple,
+                range: 0.5...2,
+                displayMultiplier: 100,
+                format: "%.0f",
+                valueSuffix: "%",
+                fieldWidth: 50,
+                onChanged: { newVal in
+                    editor.applyTextStyle(clipId: clip.id) { $0.lineHeightMultiple = newVal }
+                    editor.fitTextClipToContent(clipId: clip.id)
+                }
+            ) { newVal in
+                editor.commitTextStyle(clipId: clip.id) { $0.lineHeightMultiple = newVal }
+                editor.fitTextClipToContent(clipId: clip.id)
+            }
+        }
+    }
+
     private var opacitySlider: some View {
         InspectorRow(icon: "circle.lefthalf.filled", label: "Opacity") {
             ScrubbableNumberField(
@@ -144,28 +174,148 @@ struct TextTab: View {
         }
     }
 
-    private var backgroundRow: some View {
-        toggleColorRow(
-            icon: "rectangle.fill",
-            label: "Background",
-            enabled: style.background.enabled,
-            color: style.background.color.swiftUIColor,
-            debounceKey: "backgroundColor",
-            setEnabled: { $0.background.enabled = $1 },
-            setColor: { $0.background.color = $1 }
+    private var backgroundToggleRow: some View {
+        InspectorRow(icon: "rectangle.fill", label: "Pill") {
+            HStack(spacing: AppTheme.Spacing.sm) {
+                ColorField(
+                    displayColor: style.background.color.swiftUIColor,
+                    onUserChange: { new in
+                        editor.debouncedCommitTextStyle(clipId: clip.id, key: "backgroundColor") {
+                            $0.background.color = TextStyle.RGBA(new)
+                        }
+                    }
+                )
+                .opacity(style.background.enabled ? AppTheme.Opacity.opaque : AppTheme.Opacity.medium)
+                .disabled(!style.background.enabled)
+                Toggle(
+                    "",
+                    isOn: Binding(
+                        get: { style.background.enabled },
+                        set: { new in
+                            editor.commitTextStyle(clipId: clip.id) { $0.background.enabled = new }
+                            editor.fitTextClipToContent(clipId: clip.id)
+                        }
+                    )
+                )
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+                .tint(Color.white.opacity(AppTheme.Opacity.strong))
+            }
+        }
+    }
+
+    private func backgroundMetricRow(
+        icon: String,
+        label: String,
+        value: Double,
+        range: ClosedRange<Double>,
+        refit: Bool,
+        set: @escaping (inout TextStyle, Double) -> Void
+    ) -> some View {
+        InspectorRow(icon: icon, label: label) {
+            ScrubbableNumberField(
+                value: value,
+                range: range,
+                displayMultiplier: 100,
+                format: "%.0f",
+                valueSuffix: "%",
+                fieldWidth: 50,
+                onChanged: { newVal in
+                    editor.applyTextStyle(clipId: clip.id) { set(&$0, newVal) }
+                    if refit { editor.fitTextClipToContent(clipId: clip.id) }
+                }
+            ) { newVal in
+                editor.commitTextStyle(clipId: clip.id) { set(&$0, newVal) }
+                if refit { editor.fitTextClipToContent(clipId: clip.id) }
+            }
+        }
+    }
+
+    private var backgroundPaddingHRow: some View {
+        backgroundMetricRow(
+            icon: "arrow.left.and.right",
+            label: "Padding H",
+            value: style.background.paddingH,
+            range: 0...1,
+            refit: true,
+            set: { $0.background.paddingH = $1 }
         )
     }
 
-    private var borderRow: some View {
+    private var backgroundPaddingVRow: some View {
+        backgroundMetricRow(
+            icon: "arrow.up.and.down",
+            label: "Padding V",
+            value: style.background.paddingV,
+            range: 0...1,
+            refit: true,
+            set: { $0.background.paddingV = $1 }
+        )
+    }
+
+    private var backgroundCornerRow: some View {
+        backgroundMetricRow(
+            icon: "rectangle.roundedtop",
+            label: "Corner",
+            value: style.background.cornerRadius,
+            range: 0...0.6,
+            refit: false,
+            set: { $0.background.cornerRadius = $1 }
+        )
+    }
+
+    private var backgroundPresetRow: some View {
+        InspectorRow(icon: "wand.and.stars", label: "Preset") {
+            HStack(spacing: AppTheme.Spacing.sm) {
+                backgroundPresetButton(title: "IG Dark", preset: .instagramDark)
+                backgroundPresetButton(title: "IG Light", preset: .instagramLight)
+            }
+        }
+    }
+
+    private func backgroundPresetButton(title: String, preset: TextStyle.Preset) -> some View {
+        Button(title) {
+            editor.commitTextStyle(clipId: clip.id) {
+                $0.apply(preset)
+            }
+            editor.fitTextClipToContent(clipId: clip.id)
+        }
+        .font(.system(size: AppTheme.FontSize.sm, weight: .medium))
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+    }
+
+    private var strokeRow: some View {
         toggleColorRow(
             icon: "a.square",
-            label: "Border",
+            label: "Stroke",
             enabled: style.border.enabled,
             color: style.border.color.swiftUIColor,
-            debounceKey: "borderColor",
+            debounceKey: "strokeColor",
             setEnabled: { $0.border.enabled = $1 },
-            setColor: { $0.border.color = $1 }
+            setColor: { $0.border.color = $1 },
+            onEnabledChanged: { editor.fitTextClipToContent(clipId: clip.id) }
         )
+    }
+
+    private var strokeWidthRow: some View {
+        InspectorRow(icon: "lineweight", label: "Thickness") {
+            ScrubbableNumberField(
+                value: style.border.width,
+                range: TextStyle.Stroke.widthRange,
+                format: "%.1f",
+                valueSuffix: "%",
+                fieldWidth: 50,
+                onChanged: { newVal in
+                    editor.applyTextStyle(clipId: clip.id) { $0.border.width = newVal }
+                    editor.fitTextClipToContent(clipId: clip.id)
+                }
+            ) { newVal in
+                editor.commitTextStyle(clipId: clip.id) { $0.border.width = newVal }
+                editor.fitTextClipToContent(clipId: clip.id)
+            }
+        }
     }
 
     private func toggleColorRow(
@@ -175,7 +325,8 @@ struct TextTab: View {
         color: Color,
         debounceKey: String,
         setEnabled: @escaping (inout TextStyle, Bool) -> Void,
-        setColor: @escaping (inout TextStyle, TextStyle.RGBA) -> Void
+        setColor: @escaping (inout TextStyle, TextStyle.RGBA) -> Void,
+        onEnabledChanged: (() -> Void)? = nil
     ) -> some View {
         InspectorRow(icon: icon, label: label) {
             HStack(spacing: AppTheme.Spacing.sm) {
@@ -193,7 +344,10 @@ struct TextTab: View {
                     "",
                     isOn: Binding(
                         get: { enabled },
-                        set: { new in editor.commitTextStyle(clipId: clip.id) { setEnabled(&$0, new) } }
+                        set: { new in
+                            editor.commitTextStyle(clipId: clip.id) { setEnabled(&$0, new) }
+                            onEnabledChanged?()
+                        }
                     )
                 )
                 .labelsHidden()

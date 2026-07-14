@@ -31,6 +31,12 @@ enum CompositionBuilder {
         var errorDescription: String? { "Invalid timeline: \(reason)" }
     }
 
+    struct VoiceCleanupError: LocalizedError {
+        let clipId: String
+        let reason: String
+        var errorDescription: String? { "Could not clean audio for clip \(clipId): \(reason)" }
+    }
+
     static func build(
         timeline: Timeline,
         resolveURL: @Sendable (String) -> URL?,
@@ -284,6 +290,19 @@ enum CompositionBuilder {
             }
         } else if mediaType == .video {
             mediaURL = (try? await AlphaVideoNormalizer.premultipliedVideo(for: resolved, mediaRef: clip.mediaRef)) ?? resolved
+        } else if mediaType == .audio, let cleanup = clip.voiceCleanup {
+            do {
+                mediaURL = try await VoiceCleanupCache.shared.processedURL(
+                    sourceURL: resolved,
+                    strength: cleanup.normalizedStrength
+                )
+            } catch {
+                Log.preview.error(
+                    "voice cleanup failed. clipId=\(clip.id) "
+                        + "mediaRef=\(clip.mediaRef) error=\(Log.detail(error))"
+                )
+                throw VoiceCleanupError(clipId: clip.id, reason: error.localizedDescription)
+            }
         } else {
             mediaURL = resolved
         }
@@ -321,9 +340,7 @@ enum CompositionBuilder {
             compTrack.insertEmptyTimeRange(CMTimeRange(start: cursor, duration: gap))
         }
 
-        let sourceFrames = clip.speed == 1.0
-            ? clip.durationFrames
-            : max(1, Int(Double(clip.durationFrames) * clip.speed))
+        let sourceFrames = clip.renderedSourceFramesConsumed
         let durationSeconds = Double(sourceFrames) / Double(timescale)
         let sourceDuration = CMTime(seconds: durationSeconds, preferredTimescale: sourceTimescale)
         let sourceRange = CMTimeRange(start: trimStart, duration: sourceDuration)
@@ -388,6 +405,30 @@ enum CompositionBuilder {
     ) -> (audioMix: AVMutableAudioMix, videoComposition: AVVideoComposition) {
         let timescale = CMTimeScale(timeline.fps)
 
+        let voiceRanges = SocialAudioDucking.merged(ranges: timeline.tracks.enumerated()
+            .filter { $0.element.type == .audio && !$0.element.muted }
+            .flatMap { trackIndex, track in
+                track.clips.flatMap { clip -> [SocialAudioFrameRange] in
+                    guard clip.mediaType == .audio,
+                          clip.socialAudio?.role == .voice,
+                          let activity = clip.socialAudio?.speechActivity,
+                          trackMappings.contains(where: { mapping in
+                              guard !mapping.isVideo,
+                                    case .timeline(let mappedTrackIndex, let clipIds) = mapping.kind,
+                                    mappedTrackIndex == trackIndex else { return false }
+                              return clipIds?.contains(clip.id) ?? true
+                          }) else { return [] }
+                    return SocialAudioDucking.timelineSpeechRanges(
+                        activity: activity,
+                        clipStartFrame: clip.startFrame,
+                        clipDurationFrames: clip.durationFrames,
+                        trimStartFrame: clip.trimStartFrame,
+                        speed: clip.speed,
+                        fps: timeline.fps
+                    )
+                }
+            })
+
         let audioMix = AVMutableAudioMix()
         audioMix.inputParameters = trackMappings.filter { !$0.isVideo }.compactMap { mapping in
             guard case .timeline(let trackIndex, let clipIds) = mapping.kind,
@@ -402,7 +443,26 @@ enum CompositionBuilder {
             for clip in track.clips.sorted(by: { $0.startFrame < $1.startFrame }) {
                 if let clipIds, !clipIds.contains(clip.id) { continue }
                 guard clip.durationFrames > 0, clip.startFrame >= prevEndFrame else { continue }
-                emitVolumeEnvelope(params: params, clip: clip, timescale: timescale)
+                let duckingPlan: SocialAudioDuckingPlan? = {
+                    guard clip.socialAudio?.role == .music,
+                          let amountDb = clip.socialAudio?.duckingAmountDb,
+                          amountDb > 0 else { return nil }
+                    return SocialAudioDucking.plan(
+                        musicRange: SocialAudioFrameRange(
+                            startFrame: clip.startFrame,
+                            endFrame: clip.endFrame
+                        ),
+                        voiceRanges: voiceRanges,
+                        fps: timeline.fps,
+                        duckingAmountDb: amountDb
+                    )
+                }()
+                emitVolumeEnvelope(
+                    params: params,
+                    clip: clip,
+                    timescale: timescale,
+                    duckingPlan: duckingPlan
+                )
                 prevEndFrame = clip.startFrame + clip.durationFrames
             }
             return params
@@ -513,12 +573,17 @@ enum CompositionBuilder {
     private static func emitVolumeEnvelope(
         params: AVMutableAudioMixInputParameters,
         clip: Clip,
-        timescale: CMTimeScale
+        timescale: CMTimeScale,
+        duckingPlan: SocialAudioDuckingPlan?
     ) {
         let kfs = normalizedKeyframes(clip.volumeTrack?.keyframes ?? [], duration: clip.durationFrames)
         let hasFade = clip.fadeInFrames > 0 || clip.fadeOutFrames > 0
-        if kfs.isEmpty && !hasFade {
-            let volume = Float(clip.volumeAt(frame: clip.startFrame))
+        let duckingOffsets = duckingPlan?.breakpointOffsets ?? []
+        if kfs.isEmpty && !hasFade && duckingPlan == nil {
+            let volume = Float(
+                clip.volumeAt(frame: clip.startFrame)
+                    * (duckingPlan?.gainMultiplier(atAbsoluteFrame: clip.startFrame) ?? 1)
+            )
             let start = CMTime(value: CMTimeValue(clip.startFrame), timescale: timescale)
             let end = CMTime(value: CMTimeValue(clip.endFrame), timescale: timescale)
             guard volume.isFinite, end > start else { return }
@@ -534,7 +599,14 @@ enum CompositionBuilder {
             clip: clip,
             kfs: kfs,
             timescale: timescale,
-            sampleAt: { Float(clip.volumeAt(frame: clip.startFrame + $0)) },
+            additionalOffsets: duckingOffsets,
+            sampleAt: { offset in
+                let frame = clip.startFrame + offset
+                return Float(
+                    clip.volumeAt(frame: frame)
+                        * (duckingPlan?.gainMultiplier(atAbsoluteFrame: frame) ?? 1)
+                )
+            },
             emit: { start, end, range in
                 params.setVolumeRamp(fromStartVolume: start, toEndVolume: end, timeRange: range)
             }
@@ -546,6 +618,7 @@ enum CompositionBuilder {
         clip: Clip,
         kfs: [Keyframe<Double>],
         timescale: CMTimeScale,
+        additionalOffsets: [Int] = [],
         sampleAt: (Int) -> Float,
         emit: (Float, Float, CMTimeRange) -> Void
     ) {
@@ -554,6 +627,7 @@ enum CompositionBuilder {
         let kfs = normalizedKeyframes(kfs, duration: dur)
 
         var offsetSet: Set<Int> = [0, dur]
+        offsetSet.formUnion(additionalOffsets.filter { $0 >= 0 && $0 <= dur })
         for kf in kfs { offsetSet.insert(kf.frame) }
         for i in kfs.indices.dropLast() {
             let a = kfs[i], b = kfs[i + 1]

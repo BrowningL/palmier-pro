@@ -298,11 +298,6 @@ struct CaptionTab: View {
                     .foregroundStyle(style.color.swiftUIColor)
                     .frame(width: boxWidth, height: boxHeight)
                     .background(style.background.enabled ? style.background.color.swiftUIColor : Color.clear)
-                    .overlay {
-                        if style.border.enabled {
-                            Rectangle().stroke(style.border.color.swiftUIColor, lineWidth: AppTheme.BorderWidth.thin * scale)
-                        }
-                    }
                     .position(x: geo.size.width * center.x, y: geo.size.height * center.y)
             }
         }

@@ -56,10 +56,28 @@ struct ClipMathTests {
         #expect(clip.timelineFrame(sourceSeconds: 2.0, fps: 30) == 30)
     }
 
+    @Test func timelineFrameUsesTheEffectiveCompositionRenderRate() {
+        // The model's edit math rounds to 25 source frames, while preview/export
+        // deliberately inserts the truncated 24-frame source span and scales it
+        // across 33 timeline frames. Mapping must follow the rendered span.
+        let clip = Fixtures.clip(start: 100, duration: 33, speed: 0.75)
+        #expect(clip.sourceFramesConsumed == 25)
+        #expect(clip.renderedSourceFramesConsumed == 24)
+        #expect(clip.timelineFrame(sourceSeconds: 14.0 / 30.0, fps: 30) == 119)
+    }
+
     @Test func timelineFrameBeforeTrimReturnsNil() {
         // sourceSeconds=0.5 → 15 source frames; trimStart=30 → offsetFromTrim < 0 → nil.
         let clip = Fixtures.clip(start: 100, duration: 60, trimStart: 30)
         #expect(clip.timelineFrame(sourceSeconds: 0.5, fps: 30) == nil)
+    }
+
+    @Test func timelineFrameRoundsAtTheVisibleSourceBoundaryBeforeRejecting() {
+        let clip = Fixtures.clip(start: 100, duration: 60, trimStart: 150)
+        // Sub-frame onset estimation 0.4 source frames before the trim still
+        // rounds to the first rendered project frame; 0.6 frames does not.
+        #expect(clip.timelineFrame(sourceSeconds: 149.6 / 30, fps: 30) == 100)
+        #expect(clip.timelineFrame(sourceSeconds: 149.4 / 30, fps: 30) == nil)
     }
 
     @Test func timelineFrameAtOrPastEndFrameReturnsNil() {

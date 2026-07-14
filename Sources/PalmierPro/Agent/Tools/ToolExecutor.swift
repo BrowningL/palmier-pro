@@ -37,7 +37,7 @@ final class ToolExecutor {
             let resolved = try expandingIdPrefixes(in: args, editor: editor)
             result = try await run(tool, editor, resolved)
             // Record any edit that actually changed the timeline so `undo` can revert it.
-            if tool != .undo, !result.isError, editor.timeline != before,
+            if tool.canRecordTimelineUndo, !result.isError, editor.timeline != before,
                let actionName = editor.undoManager?.undoActionName {
                 agentUndoStack.append(actionName)
             }
@@ -75,6 +75,11 @@ final class ToolExecutor {
         switch tool {
         case .getTimeline:   return try getTimeline(editor, args)
         case .getMedia:      return try getMedia(editor)
+        case .addMarkers:    return try addMarkers(editor, args)
+        case .setMarkerProperties: return try setMarkerProperties(editor, args)
+        case .removeMarkers: return try removeMarkers(editor, args)
+        case .detectBeats:   return try await detectBeats(editor, args)
+        case .addBeatMarkers: return try await addBeatMarkers(editor, args)
         case .inspectMedia:  return try await inspectMedia(editor, args)
         case .getTranscript: return try await getTranscript(editor, args)
         case .inspectTimeline: return try await inspectTimeline(editor, args)
@@ -263,6 +268,22 @@ func parseAlignment(_ raw: String?, path: String) throws -> TextStyle.Alignment?
         throw ToolError("\(path): invalid alignment '\(raw)'. Expected 'left', 'center', or 'right'.")
     }
     return a
+}
+
+func parseTextPreset(_ raw: String?, path: String) throws -> TextStyle.Preset? {
+    guard let raw else { return nil }
+    guard let preset = TextStyle.Preset(rawValue: raw) else {
+        throw ToolError("\(path): invalid textPreset '\(raw)'. Expected 'instagramLight' or 'instagramDark'.")
+    }
+    return preset
+}
+
+func parseStrokeWidth(_ value: Double?, path: String) throws -> Double? {
+    guard let value else { return nil }
+    guard value.isFinite, TextStyle.Stroke.widthRange.contains(value) else {
+        throw ToolError("\(path): strokeWidth must be between 0 and 20.")
+    }
+    return value
 }
 
 // Untrusted Double→Int: nil on NaN/Inf/overflow instead of trapping.

@@ -1,0 +1,244 @@
+# Palmier Pro Fork Engineering Notes
+
+This is a living note for the BrowningL fork. Keep it focused on details that help an agent make correct edits, build the local app, and avoid breaking persistence.
+
+## How Agents Should Use This File
+
+- Read this file before changing editor models, timeline UI, inspector controls, render/compositing code, effects, project persistence, or agent/MCP tools.
+- Update this file in the same commit when adding or changing a custom fork feature.
+- Keep entries factual and compact: feature id/model field, where the user finds it, how the agent uses it, how it persists, what tests cover it, and any install caveats.
+- Treat persistence as a first-class requirement. A feature is not complete just because it appears in the UI during the current app session.
+
+## Local Workflow
+
+- Main working branch for the current custom editor work: `feature/clip-blend-modes`.
+- Remote fork: `origin` points at `https://github.com/BrowningL/palmier-pro.git`.
+- Upstream contributions are optional. For local use, commit and push to the fork so the upgraded app is not blocked by maintainer review.
+- Do not assume a new build is what the user has open. A running `PalmierPro.app` process keeps using the binary it launched with until the app is fully quit and reopened.
+
+## Build, Test, and Install
+
+Standard development:
+
+```bash
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift build
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test
+```
+
+Bundled debug app:
+
+```bash
+./scripts/dev.sh --no-stream
+```
+
+Install the current debug binary into the local patched app bundles:
+
+```bash
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift build
+SRC="$PWD/.build/arm64-apple-macosx/debug/PalmierPro"
+RES_BUNDLE="$PWD/.build/arm64-apple-macosx/debug/PalmierPro_PalmierPro.bundle"
+
+for APP in "/Applications/PalmierPro.app" "$HOME/Applications/PalmierPro-BlendModes.app"; do
+  test -d "$APP" || continue
+  DEST="$APP/Contents/MacOS/PalmierPro"
+  cp "$SRC" "$DEST"
+  rm -rf "$APP/Contents/Resources/Fonts"
+  cp -R "$RES_BUNDLE/Fonts" "$APP/Contents/Resources/"
+  cp "$RES_BUNDLE"/*.metallib "$APP/Contents/Resources/"
+  if ! otool -l "$DEST" | grep -q '@executable_path/../Frameworks'; then
+    install_name_tool -add_rpath '@executable_path/../Frameworks' "$DEST"
+  fi
+  codesign --force --deep --sign - "$APP"
+  codesign --verify --deep --strict "$APP"
+done
+```
+
+After installing, fully quit and reopen Palmier Pro. Do not force quit if the user may have unsaved project state.
+
+Useful checks:
+
+```bash
+git status --short --branch
+pgrep -fl 'PalmierPro|palmier' || true
+```
+
+## Core Architecture
+
+- `Sources/PalmierPro/Models/Timeline.swift` is the project timeline model. Persistent timeline fields belong here and must be `Codable`.
+- `Sources/PalmierPro/Project/VideoProject.swift` is the `NSDocument` bridge. Save writes `editorViewModel.timeline` into the `.palmier/project.json` package. Reopen reads the same JSON back into `loadedTimeline` and applies it in `makeWindowControllers()`.
+- `Sources/PalmierPro/Editor/ViewModel/` owns editor mutations, undo registration, dirty-state notification, media state, and timeline helper APIs.
+- `Sources/PalmierPro/Timeline/TimelineView.swift` draws the timeline and handles direct timeline interactions.
+- `Sources/PalmierPro/Inspector/InspectorView.swift` contains the main clip inspector controls.
+- `Sources/PalmierPro/Preview/CompositionBuilder.swift` builds AVFoundation compositions for preview/export.
+- `Sources/PalmierPro/Compositing/CustomVideoCompositor.swift` and `Sources/PalmierPro/Compositing/FrameRenderer.swift` render custom visual compositing.
+- `Sources/PalmierPro/Agent/Tools/` defines MCP/in-app agent tools, schemas, executors, and agent-facing instructions.
+
+## Social Audio Mix
+
+- Find it in Inspector > Audio > Social Audio Mix. The repeatable stack is Voice Cleanup first, then Social Audio Mix normalization and the selected music behavior; authored volume/fades remain the final manual layer.
+- `Clip.socialAudio` persists the voice/music role, preset, measured loudness/sample peak, automatic gain, source-time speech activity, and music duck amount. Old projects decode with no social-audio recipe.
+- Balanced (Ducking) targets voice at -16 LUFS and music at -18 LUFS with 14 dB speech ducking; Clear Voice (Ducking) uses -16/-20 LUFS with 18 dB ducking. Fixed Level (No Ducking) targets -16/-30 LUFS and keeps the normalized music gain steady through spoken sections. Conservative sample-peak headroom limits gain without adding a latency-producing live limiter.
+- Fixed Level provides a repeatable measured starting balance, not a guaranteed perceptual mix. Arrangement density, frequency masking, recording quality, and phone speakers can still justify a final authored volume adjustment by ear.
+- Add Music imports a local audio file to a dedicated track and runs the same whole-project balance pass. The selected preset is remembered for future projects.
+- Analysis streams 48 kHz Float32 PCM, bounds hardware decoder concurrency to two jobs, and uses the cleaned proxy when Voice Cleanup is enabled. Preview and export consume persisted `AVAudioMix` gain ramps only, so the feature does not change clip timing or A/V sync.
+- Tests live in `Tests/PalmierProTests/Audio/AudioLoudnessAnalyzerTests.swift`, `SocialAudioDuckingTests.swift`, `SocialAudioSettingsTests.swift`, and `SocialAudioCompositionTests.swift`.
+- After installing a new debug binary, fully quit and reopen Palmier Pro before expecting the controls to appear; do not force quit over an unsaved project.
+
+## Persistence Rules
+
+For any feature that should survive save, quit, and reopen:
+
+1. Store it in a `Codable` model that is encoded by `Timeline`, `MediaManifest`, or another document package file.
+2. Add a decoding default for old projects if the field is new.
+3. Mutate it through `EditorViewModel` APIs, not by editing UI-local state only.
+4. Register undo where appropriate.
+5. Call the document dirty path for every persistent edit.
+6. Add a model round-trip test and a `VideoProject.write(...)` package test when the feature affects project files.
+
+If the feature can be controlled from the inspector and from the agent, both paths should hit the same model/editing API. Do not keep a parallel UI-only representation.
+
+For effects, prefer the existing `Clip.effects` model and `EffectRegistry` descriptor path. That makes inspector controls, rendering, persistence, and `apply_effect` validation share one effect id and parameter schema. A new effect usually should not need a bespoke tool unless it has behavior beyond setting effect parameters.
+
+The dirty path is:
+
+```text
+editor mutation
+-> EditorViewModel.markDocumentEdited()
+-> EditorViewModel.onDocumentEdited
+-> VideoProject.updateChangeCount(.changeDone)
+-> NSDocument autosave/save knows the package changed
+```
+
+Do not suppress future dirty notifications just because `editorViewModel.isDocumentEdited` is already true. Autosave can save while the document remains open, and later edits still need to notify `NSDocument`.
+
+Current package-level persistence regression:
+
+- `Tests/PalmierProTests/Media/ProjectDocumentIOTests.swift`
+- `editorMarkerAndBlendModePersistIntoProjectPackage`
+
+## Agent and MCP Feature Wiring
+
+If the Palmier AI or MCP clients need to use a new feature, update all relevant layers:
+
+- `ToolDefinitions.swift`: tool schema, enum values, descriptions, required fields.
+- `ToolExecutor+*.swift`: argument decoding, validation, mutation call, JSON result.
+- `ToolExecutor+InspectTimeline.swift` and timeline serialization helpers when the agent must see the new state.
+- `AgentInstructions.swift`: concise guidance for when and how the agent should use the feature.
+- `AgentMentionContext.swift`: include fields that should be visible when clips or markers are mentioned.
+- `Tests/PalmierProTests/Agent/ToolExecutorTests.swift`: accepted input, rejected input, state changes, and dirty notification.
+
+The app exposes the same tool definitions to the in-app agent and MCP service, so correct tool wiring is what lets external agents and Palmier's own AI recognize the feature.
+
+Effects are the main exception to hand-editing every tool schema: `apply_effect` is driven by `EffectRegistry.all`, and `ToolExecutor` validates effect ids and params against that registry. For a normal effect, add the descriptor, inspector controls if needed, render implementation, agent instructions, and an `apply_effect` test.
+
+## Current Custom Features
+
+### Clip Blend Modes
+
+- Model: `Sources/PalmierPro/Models/ClipBlendMode.swift`
+- Clip field: `Clip.blendMode` in `Sources/PalmierPro/Models/Timeline.swift`
+- Inspector UI: `InspectorView.blendModeRow(...)`
+- Rendering: `FrameRenderer.composite(... blendMode:)`
+- Agent tool: `set_clip_properties` accepts `blendMode`.
+- Tests: `ProjectRoundTripTests`, `CompositorRenderTests`, `ToolExecutorTests`, `ProjectDocumentIOTests`.
+
+Use `difference` with a white logo PNG to invert the background through the logo alpha. Use `exclusion` for a softer inversion.
+
+### Timeline Markers
+
+- Model: `TimelineMarker` and `Timeline.markers` in `Timeline.swift`
+- Editor APIs: `EditorViewModel+Markers.swift`
+- Timeline UI: marker drawing, context menu, rename/delete/go-to handlers in `TimelineView.swift`
+- Agent tools: `add_markers`, `set_marker_properties`, `remove_markers`
+- Tests: `ProjectRoundTripTests`, `ToolExecutorTests`, `ProjectDocumentIOTests`
+
+Markers are exact project-frame anchors. They do not render and do not lengthen exports.
+
+### Beat Detection and Beat Markers
+
+- UI: right-click an audio clip (or either half of a linked video/audio pair) and choose Create/Replace Beat Markers -> Every Beat, Every 2 Beats, or Every 4 Beats. Generated diamonds snap clip moves, trims, timeline ranges, razor cuts, and external drops; dense guides and snap targets are thinned only at overview zoom and every beat returns as you zoom in.
+- Analysis: `AudioBeatDetector` streams mono 22.05 kHz PCM through a 1024-sample Hann-windowed Accelerate DFT. Weighted low/mid/high spectral flux, adaptive novelty, autocorrelation tempo estimation, and a constrained fractional-period beat path provide the grid without loading the decoded song into memory.
+- Accuracy: subrange analysis uses tempo-sized real-audio preroll and strict visible-range filtering, so a trim boundary neither fabricates a beat nor admits a beat just before the cut. Decoder presentation timestamps preserve AAC priming/edit-list timing. Source seconds map through the clip's trim and effective rendered playback rate, then round once to exact project frames; short clips borrow at least four periods of nearby source context at the slowest requested tempo.
+- Performance: `AudioTrackReader` globally limits concurrent decoders. A small source-stat/range/tempo LRU caches completed analyses, so changing marker cadence does not decode or FFT the song again.
+- Safety: every generated marker stores source clip provenance and a timing signature. Moving, trimming, retiming, replacing, or deleting that clip makes its old grid inactive, while relinking the source retires its grid outright; stale beats neither draw, snap, nor reach the agent. Re-analysis atomically replaces the prior group while preserving manual markers, and direct removal wins over older in-flight analysis. Linked video/audio pairs canonicalize to their audio bearer to prevent duplicate grids.
+- Confidence: ordinary marker creation refuses confidence below 0.45. The UI explains the uncertainty and requires Create Anyway; the agent may bypass the gate only after explicit user acceptance. `bpmOverride` (30–300) resolves half/double-tempo ambiguity even outside the automatic search range, but does not identify musical bars or downbeats.
+- Agent/MCP: `detect_beats` is read-only and returns `[frame, beatIndex, strength]` rows already mapped to the project. `add_beat_markers` returns the selected cadence as `selectedBeatFrames`; `get_timeline` groups stored grids by source clip. Outputs cap beat rows at 500 and expose frame-window paging for long audio.
+- Editing contract: for hard-cut photos, N complete photos need N+1 consecutive selected boundaries; photo i starts at boundary i and lasts `boundary[i+1] - boundary[i]`. Palmier currently provides exact cut points, not a promised cross-dissolve transition model.
+- Tests: `AudioBeatDetectorTests`, `BeatMarkerToolTests`, `SnapEngineTests`, `ProjectRoundTripTests`, and `ToolExecutorTests` cover tempo/timing, AAC priming, stereo resampling, silence/steady-tone rejection, low-tempo context, trim/speed mapping, cache-safe cadence replacement, stale-grid invalidation, request races, persistence, snapping, compact agent output, and undo ownership.
+
+### Voice Cleanup
+
+- Model: optional `Clip.voiceCleanup` with a persisted `VoiceCleanupSettings.strength` (0–1). Legacy projects decode with cleanup disabled.
+- Inspector: select an audio clip, then use Audio -> Voice Cleanup -> Remove Noise and Strength. This is speech isolation; the visual "Noise Reduction" control under Adjust remains a Core Image effect for picture noise.
+- Processing: `VoiceCleanupRenderer` hosts Apple's `kAudioUnitSubType_AUSoundIsolation` in High Quality Voice mode inside an offline `AVAudioEngine`. It queries the audio unit's latency after startup, discards that delay, and writes exactly the decoded source sample count so cleaned speech remains in lip sync.
+- Cache: `VoiceCleanupCache` writes lossless 24-bit ALAC/CAF proxies under `~/Library/Caches/PalmierPro/VoiceCleanup`. Its key includes the source path, file size, modification time, algorithm version, and exact normalized strength. Renders are deduplicated, serialized to control CPU/thermal load, and atomically published; zero strength bypasses processing.
+- Preview/export: `CompositionBuilder` substitutes the cached proxy before normal speed, volume, fade, and keyframe handling, so timeline playback, timeline rendering, and final export share the same cleaned audio. A cleanup failure aborts the rebuild/export instead of silently producing raw audio. Save Audio Clip as Media also uses the proxy. The separate `P` audition tool currently plays the source URL directly.
+- Agent/MCP: `set_clip_properties` accepts `voiceCleanupEnabled` and `voiceCleanupStrength` for audio clips. The shared schema covers the in-app agent and MCP clients.
+- Interchange: XML/FCPXML exports do not carry this custom recipe; export rendered media when the cleaned result must leave Palmier Pro.
+- Tests: `VoiceCleanupTests` covers legacy decoding, persistence, latency-compensated rendering, composition integration, and corrupt-cache regeneration. `VoiceCleanupToolTests` covers agent mutation and validation.
+
+### Luma Key
+
+- Effect id: `key.luma`
+- Metal kernel: `Metal/LumaKey.metal`
+- Swift wrapper: `Sources/PalmierPro/Compositing/Kernels/LumaKeyKernel.swift`
+- Registry/UI: `EffectRegistry.swift`, `Inspector/Tabs/AdjustTab.swift`
+- Agent tool: `apply_effect` accepts `type: "key.luma"` with `threshold` and `softness`.
+- Persistence: stored as a normal `Clip.effects` entry, so it saves with the clip rather than inspector-local state.
+- Install caveat: `LumaKey.metallib` must be copied from `PalmierPro_PalmierPro.bundle` into the app bundle resources when installing a patched binary.
+- Tests: `LumaKeyKernelTests`, `CompositorRenderTests`, `EffectTests`, `ToolExecutorTests`.
+
+Use this for simple white-background removal. Start with `threshold: 0.85` and `softness: 0.08`; lower the threshold to remove more near-white pixels, raise it to preserve bright subject details.
+
+### Creator Connect Fonts
+
+- Bundled font families: `Space Grotesk` and `IBM Plex Mono`.
+- Resource paths: `Sources/PalmierPro/Resources/Fonts/SpaceGrotesk/` and `Sources/PalmierPro/Resources/Fonts/IBMPlexMono/`.
+- Registration: `BundledFonts.register()` scans `Resources/Fonts` at launch and exposes families in the text inspector's Creator Connect + Featured font list.
+- Picker behavior: `BundledFonts.featuredFamiliesForPicker` pins `Space Grotesk` and `IBM Plex Mono` above the rest of the bundled fonts when their folders are present.
+- Agent usage: `add_texts`, `add_captions`, and `set_clip_properties` accept `fontName: "Space Grotesk"` or `fontName: "IBM Plex Mono"`.
+- Style convention: use Space Grotesk for Creator Connect titles/body; use IBM Plex Mono for status labels, small uppercase metadata, numbers, and technical UI text.
+- Persistence: text clips store `TextStyle.fontName` in the project package, so these choices persist on save/reopen.
+- Install caveat: copying only the executable is not enough when fonts change; copy `PalmierPro_PalmierPro.bundle/Fonts` into the app bundle resources and reopen the app.
+
+### Text Stroke
+
+- `TextStyle.border` remains the project JSON key for compatibility, but stores a glyph stroke with enabled, color, and width. Width is a percentage of font size and legacy `{enabled,color}` values default to 3%.
+- Find it in Inspector > Text > Appearance > Stroke. Thickness supports 0–20%; enabling or resizing the stroke refits the text box.
+- Preview, snapshots, and encoded video exports share `TextClipLayer`, which draws a negative Core Text stroke width for filled, outlined glyphs and reserves an inset to avoid clipping.
+- Agent/MCP: `add_texts`, `add_captions`, and `set_clip_properties` accept `strokeEnabled`, `strokeColor`, and `strokeWidth`. FCPXML exports do not transport this custom style; export rendered video when the outline must be preserved.
+- `TextStrokeTests` covers legacy decoding, JSON round-trip, Core Text attributes, layout padding, and rasterized fill/stroke pixels.
+
+### Instagram Pill Captions
+
+- `instagramLight` and `instagramDark` are complete `TextStyle` presets: SF Pro Bold, calibrated 0.912 line height, matching text/pill colours, per-line rounded background, and no shadow. The inspector and agent tools call the same preset implementation.
+- `TextBackgroundPath` and `TextGlyphLayer` typeset into the same finite text rectangle. This prevents the background from drawing an invisible wrapped line (the lower white tab seen at exact fractional width boundaries).
+- `add_texts.trackGroup` atomically creates one new track per named visual line in a single undo step. Adjacent cumulative stages on each group implement the growing-pill word reveal without overlapping separate word boxes.
+- The reusable workflow, timing rules, limitations, and agent prompt live in [`docs/growing-pill-captions.md`](growing-pill-captions.md). A user-global Palmier skill can apply the same method in future projects.
+- `TextBackgroundPillTests`, `ProjectRoundTripTests`, and `ToolExecutorTests` cover finite-height layout, persistence, presets/stroke, and grouped placement.
+
+## Deferred Work
+
+### Standalone Chat Log Export
+
+- Add an Export Chat action to chat history for a standalone UTF-8 Markdown file containing the session title, date, and ordered user/assistant text. Keep technical tool payloads and results out of the default human-readable transcript.
+- Reuse the persisted `ChatSession` data already stored under `.palmier/chat/`; this is a user-facing extraction path, not a new persistence format. Export must not dirty the project.
+- Decide separately whether a later advanced option should include tool activity or lossless JSON. The current model has only a session-level `updatedAt`, so per-message timestamps require a backward-compatible model addition.
+- Likely implementation points are `ChatSessionStore.swift`, a focused formatter/exporter, and `ChatHistoryList.swift`; cover formatting, empty sessions, safe filenames, and write failures with focused tests.
+
+## Feature Checklist
+
+Before calling a feature complete:
+
+- Model field is persisted with a backward-compatible decode default.
+- UI edits, agent edits, and undo/redo all go through shared editor mutation APIs.
+- Persistent edits mark the document dirty.
+- Save/reopen behavior is covered when the feature stores new project state.
+- Preview and export share the same rendering path or both are updated deliberately.
+- Custom Metal kernels are included in installed app resources and verified in the patched app bundle.
+- The inspector uses `AppTheme` constants rather than hardcoded design values.
+- The agent can inspect and mutate the feature if the user expects AI control.
+- `docs/fork-engineering-notes.md` is updated with the final implementation shape.
+- Focused tests pass.
+- Full `swift test` passes.
+- Patched app bundle is installed, signed, and reopened.

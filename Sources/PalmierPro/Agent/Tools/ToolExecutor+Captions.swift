@@ -4,6 +4,8 @@ import Foundation
 extension ToolExecutor {
     private static let addCaptionsAllowedKeys: Set<String> = [
         "clipIds", "fontName", "fontSize", "color", "centerX", "centerY", "textCase", "censorProfanity", "language",
+        "textPreset", "backgroundEnabled", "backgroundColor",
+        "strokeEnabled", "strokeColor", "strokeWidth",
     ]
 
     func addCaptions(_ editor: EditorViewModel, _ args: [String: Any]) async throws -> ToolResult {
@@ -12,9 +14,27 @@ extension ToolExecutor {
         let clipIds = (args["clipIds"] as? [Any])?.compactMap { $0 as? String } ?? []
 
         var style = TextStyle(fontSize: AppTheme.Caption.defaultFontSize)
+        if let preset = try parseTextPreset(args.string("textPreset"), path: "add_captions") {
+            style.apply(preset)
+        }
         if let f = args.string("fontName") { style.fontName = f }
         if let s = args.double("fontSize") { style.fontSize = s }
         if let c = try parseColorHex(args.string("color"), path: "add_captions") { style.color = c }
+        if let c = try parseColorHex(args.string("backgroundColor"), path: "add_captions") {
+            style.background.color = c
+            style.background.enabled = true
+        }
+        if let enabled = args["backgroundEnabled"] as? Bool { style.background.enabled = enabled }
+        if let c = try parseColorHex(args.string("strokeColor"), path: "add_captions") {
+            style.border.color = c
+            style.border.enabled = true
+        }
+        if let width = try parseStrokeWidth(args.double("strokeWidth"), path: "add_captions") {
+            style.border.width = width
+            style.border.enabled = width > 0
+        }
+        if let enabled = args["strokeEnabled"] as? Bool { style.border.enabled = enabled }
+        if style.background.enabled { style.shadow.enabled = false }
 
         let locale = try await Self.parseLocale(args, path: "add_captions")
 

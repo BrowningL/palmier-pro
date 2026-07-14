@@ -48,6 +48,15 @@ struct ProjectRoundTripTests {
         #expect(dc.opacity == 0.5)
     }
 
+    @Test func clipBlendModeSurvivesRoundTrip() throws {
+        var clip = Fixtures.clip(start: 0, duration: 60)
+        clip.blendMode = .difference
+        let timeline = Fixtures.timeline(tracks: [Fixtures.videoTrack(clips: [clip])])
+
+        let decoded = try roundTrip(timeline)
+        #expect(decoded.tracks[0].clips[0].blendMode == .difference)
+    }
+
     @Test func clipTransformAndCropSurviveRoundTrip() throws {
         var clip = Fixtures.clip(start: 0, duration: 30)
         clip.transform = Transform(centerX: 0.4, centerY: 0.6, width: 0.5, height: 0.5, rotation: 45,
@@ -119,7 +128,47 @@ struct ProjectRoundTripTests {
         #expect(decoded.tracks[1].muted == true)
     }
 
+    @Test func timelineMarkersSurviveRoundTrip() throws {
+        var timeline = Fixtures.timeline()
+        timeline.markers = [
+            TimelineMarker(id: "m1", frame: 42, label: "Insert still", color: "#F29933"),
+            TimelineMarker(
+                id: "m2", frame: 120, color: "#58A822", kind: .beat,
+                sourceClipId: "song-clip", beatIndex: 7, strength: 0.82,
+                sourceTimingSignature: "song|0|300|0|speed|30"
+            ),
+        ]
+
+        let decoded = try roundTrip(timeline)
+        #expect(decoded.markers == timeline.markers)
+    }
+
+    @Test func legacyTimelineMarkerDefaultsToManualWithoutBeatProvenance() throws {
+        let json = #"{"id":"m1","frame":42,"label":"Legacy"}"#
+        let marker = try JSONDecoder().decode(TimelineMarker.self, from: Data(json.utf8))
+
+        #expect(marker.kind == .manual)
+        #expect(marker.sourceClipId == nil)
+        #expect(marker.beatIndex == nil)
+        #expect(marker.strength == nil)
+        #expect(marker.sourceTimingSignature == nil)
+    }
+
     // MARK: - Legacy / tolerant decode
+
+    @Test func timelineMissingMarkersFieldDecodesWithEmptyMarkers() throws {
+        let json = """
+        {
+          "fps": 30,
+          "width": 1920,
+          "height": 1080,
+          "settingsConfigured": true,
+          "tracks": []
+        }
+        """
+        let timeline = try JSONDecoder().decode(Timeline.self, from: Data(json.utf8))
+        #expect(timeline.markers.isEmpty)
+    }
 
     @Test func trackMissingMutedFieldDecodesAsFalse() throws {
         // Older projects didn't have muted/hidden/syncLocked. They must decode with defaults.
@@ -151,6 +200,7 @@ struct ProjectRoundTripTests {
         #expect(clip.speed == 1.0)
         #expect(clip.volume == 1.0)
         #expect(clip.opacity == 1.0)
+        #expect(clip.blendMode == .normal)
         #expect(clip.fadeInFrames == 0)
         #expect(clip.fadeInInterpolation == .linear)
         #expect(clip.transform == Transform())
@@ -193,6 +243,35 @@ struct ProjectRoundTripTests {
         """
         let style = try JSONDecoder().decode(TextStyle.self, from: Data(json.utf8))
         #expect(style.fontScale == 1.0)
+    }
+
+    @Test func legacyTextBackgroundGainsPillDefaults() throws {
+        let json = """
+        {
+          "fontName": "Helvetica-Bold",
+          "fontSize": 48,
+          "background": {
+            "enabled": true,
+            "color": {"r": 1, "g": 1, "b": 1, "a": 1}
+          }
+        }
+        """
+
+        let style = try JSONDecoder().decode(TextStyle.self, from: Data(json.utf8))
+        #expect(style.lineHeightMultiple == 1.0)
+        #expect(style.background.enabled)
+        #expect(style.background.paddingH == TextStyle.Background.defaultPaddingH)
+        #expect(style.background.paddingV == TextStyle.Background.defaultPaddingV)
+        #expect(style.background.cornerRadius == TextStyle.Background.defaultCornerRadius)
+    }
+
+    @Test func instagramPresetGeometrySurvivesRoundTrip() throws {
+        var style = TextStyle(fontSize: 42)
+        style.apply(.instagramLight)
+        style.border = TextStyle.Stroke(enabled: true, width: 2.5)
+
+        let data = try JSONEncoder().encode(style)
+        #expect(try JSONDecoder().decode(TextStyle.self, from: data) == style)
     }
 
     // MARK: - MediaManifest
