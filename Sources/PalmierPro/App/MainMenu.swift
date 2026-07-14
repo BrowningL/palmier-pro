@@ -22,8 +22,14 @@ enum MainMenuBuilder {
         let menu = NSMenu(title: "Palmier Pro")
         menu.addItem(withTitle: "About Palmier Pro", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
         menu.addItem(.separator())
-        let updatesItem = NSMenuItem(title: "Check for Updates…", action: #selector(Updater.checkForUpdates(_:)), keyEquivalent: "")
-        updatesItem.target = Updater.shared
+        let updater = Updater.shared
+        let updatesItem = NSMenuItem(
+            title: updater.isEnabled ? "Check for Updates…" : "Official Updates Disabled (Custom Build)",
+            action: #selector(Updater.checkForUpdates(_:)),
+            keyEquivalent: ""
+        )
+        updatesItem.target = updater
+        updatesItem.isEnabled = updater.isEnabled
         menu.addItem(updatesItem)
         menu.addItem(.separator())
         menu.addItem(withTitle: "Settings…", action: #selector(AppDelegate.showSettings(_:)), keyEquivalent: ",")

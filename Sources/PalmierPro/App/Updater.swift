@@ -5,6 +5,7 @@ import Sparkle
 final class Updater: NSObject {
     static let shared = Updater()
 
+    private(set) var isEnabled = false
     private(set) var updateAvailable = false
     private(set) var updateVersion: String?
 
@@ -14,9 +15,11 @@ final class Updater: NSObject {
 
     private override init() {
         super.init()
-        guard Bundle.main.bundleURL.pathExtension == "app",
-              Bundle.main.object(forInfoDictionaryKey: "SUFeedURL") != nil
-        else { return }
+        guard Self.shouldEnableUpdates(
+            bundlePathExtension: Bundle.main.bundleURL.pathExtension,
+            infoDictionary: Bundle.main.infoDictionary
+        ) else { return }
+        isEnabled = true
         let controller = SPUStandardUpdaterController(
             startingUpdater: true,
             updaterDelegate: self,
@@ -29,6 +32,18 @@ final class Updater: NSObject {
 
     @objc func checkForUpdates(_ sender: Any?) {
         controller?.checkForUpdates(sender)
+    }
+
+    static func shouldEnableUpdates(
+        bundlePathExtension: String,
+        infoDictionary: [String: Any]?
+    ) -> Bool {
+        guard bundlePathExtension == "app",
+              let infoDictionary,
+              infoDictionary["PalmierForkBuild"] as? Bool != true,
+              infoDictionary["SUFeedURL"] != nil
+        else { return false }
+        return true
     }
 
     private func checkForUpdateInformation() {

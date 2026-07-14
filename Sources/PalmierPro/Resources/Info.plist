@@ -62,8 +62,12 @@
 	<string>26.0</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
-	<key>SUEnableAutomaticChecks</key>
+	<key>PalmierForkBuild</key>
 	<true/>
+	<key>PalmierForkName</key>
+	<string>BrowningL custom integration</string>
+	<key>SUEnableAutomaticChecks</key>
+	<false/>
 	<key>SUFeedURL</key>
 	<string>https://raw.githubusercontent.com/palmier-io/palmier-pro/main/appcast.xml</string>
 	<key>SUPublicEDKey</key>
