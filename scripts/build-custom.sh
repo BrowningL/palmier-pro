@@ -35,6 +35,39 @@ read_config CLERK_PUBLISHABLE_KEY PalmierClerkPublishableKey
 read_config CONVEX_DEPLOYMENT_URL PalmierConvexDeploymentURL
 read_config CONVEX_HTTP_URL PalmierConvexHttpURL
 
+prefetch_speech_core() {
+  local url checksum cache_dir cache_name cache_file temp_file actual
+  url="https://github.com/soniqo/speech-core/releases/download/v0.0.6/SpeechCore.xcframework.zip"
+  checksum="aca6733cd04b873e1f7a428993e8d4f23ffceed42f7507cd1196c0b89d34f170"
+  cache_dir="${SWIFTPM_ARTIFACT_CACHE:-$HOME/Library/Caches/org.swift.swiftpm/artifacts}"
+  cache_name="$(printf '%s' "$url" | sed 's/[^A-Za-z0-9]/_/g')"
+  cache_file="$cache_dir/$cache_name"
+
+  if [ -f "$cache_file" ]; then
+    actual="$(shasum -a 256 "$cache_file" | awk '{print $1}')"
+    [ "$actual" = "$checksum" ] && return
+  fi
+
+  mkdir -p "$cache_dir"
+  temp_file="$(mktemp "${TMPDIR:-/tmp}/palmier-speech-core.XXXXXX")"
+  if ! curl --fail --location --retry 3 --silent --show-error "$url" --output "$temp_file"; then
+    rm -f "$temp_file"
+    echo "error: failed to download the bundled SpeechCore artifact" >&2
+    exit 1
+  fi
+  actual="$(shasum -a 256 "$temp_file" | awk '{print $1}')"
+  if [ "$actual" != "$checksum" ]; then
+    rm -f "$temp_file"
+    echo "error: bundled SpeechCore checksum mismatch" >&2
+    exit 1
+  fi
+  mv "$temp_file" "$cache_file"
+}
+
+# SwiftPM can stall while fetching this conditional binary target. Seed its
+# checksum-verified artifact cache so clean-Mac builds are deterministic.
+prefetch_speech_core
+
 "$ROOT/scripts/bundle.sh" "$CONFIG"
 
 SOURCE_APP="$ROOT/.build/PalmierPro.app"
