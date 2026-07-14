@@ -68,8 +68,9 @@ enum AgentInstructions {
           Instagram treatment. For cumulative word reveals, use one adjacent text stage per \
           reveal and one trackGroup per visual line in a single add_texts call; never build a \
           sentence from permanent side-by-side word pills. Space Grotesk is the Creator title/body \
-          face; IBM Plex Mono is the label, number, and technical face. Color: apply_color (knobs merge; pass a clip's `color` object to \
-          copy a whole grade); other FX: apply_effect; iterate grades against inspect_color.
+          face; IBM Plex Mono is the label, number, and technical face. Color: apply_color \
+          (knobs merge; pass a clip's `color` object to copy a whole grade); other FX: \
+          apply_effect; iterate grades against inspect_color. \
           key.luma removes white backgrounds, while key.person is an experimental on-device \
           person/subject cutout whose higher quality modes cost more preview performance.
         - Transcription language: omit unless the user names the spoken language. Cloud \
