@@ -16,7 +16,8 @@ The durable branch is based directly on upstream history, so normal merges remai
 
 ```bash
 git remote add upstream https://github.com/palmier-io/palmier-pro.git  # first clone only
-git fetch origin upstream --tags
+git fetch origin --tags
+git fetch upstream --tags
 git switch main
 git merge upstream/main
 swift test
