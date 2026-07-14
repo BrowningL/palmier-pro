@@ -7,6 +7,8 @@ enum ToolName: String, CaseIterable, Sendable {
     case addMarkers = "add_markers"
     case setMarkerProperties = "set_marker_properties"
     case removeMarkers = "remove_markers"
+    case detectBeats = "detect_beats"
+    case addBeatMarkers = "add_beat_markers"
     case addClips = "add_clips"
     case insertClips = "insert_clips"
     case removeClips = "remove_clips"
@@ -45,6 +47,27 @@ enum ToolName: String, CaseIterable, Sendable {
     case sendFeedback = "send_feedback"
     case setProjectSettings = "set_project_settings"
     case readSkill = "read_skill"
+
+    /// Only these tools are allowed to claim a newly-created timeline undo item.
+    /// Async read tools can overlap a user's edit; inferring ownership from a
+    /// before/after timeline diff would otherwise let the agent undo that user edit.
+    var canRecordTimelineUndo: Bool {
+        switch self {
+        case .addMarkers, .setMarkerProperties, .removeMarkers, .addBeatMarkers,
+             .addClips, .insertClips, .removeClips, .removeTracks, .moveClips,
+             .setClipProperties, .setKeyframes, .splitClips, .rippleDeleteRanges,
+             .removeWords, .syncAudio, .addTexts, .addCaptions, .applyColor,
+             .applyEffect, .setProjectSettings:
+            true
+        case .getTimeline, .getMedia, .detectBeats, .undo, .exportProject,
+             .generateVideo, .generateImage, .generateAudio, .upscaleMedia,
+             .importMedia, .listModels, .inspectMedia, .getTranscript,
+             .inspectTimeline, .searchMedia, .inspectColor, .listFolders,
+             .createFolder, .moveToFolder, .renameMedia, .renameFolder,
+             .deleteMedia, .deleteFolder, .sendFeedback, .readSkill:
+            false
+        }
+    }
 }
 
 struct AgentTool: @unchecked Sendable {
@@ -57,7 +80,7 @@ enum ToolDefinitions {
     static let all: [AgentTool] = [
         AgentTool(
             name: .getTimeline,
-            description: "Always call at the start of a session. Returns project settings (fps, resolution, totalFrames), timeline markers, track list with types and order, all clips with their frames and properties, and canGenerate (if false, generation/upscale tools will fail — tell the user to sign in to Palmier and subscribe before attempting them). The clipId/trackId/markerId values here are what other tools accept.\n\nMarkers are exact project-frame anchors for placement; use a marker's frame as add_clips.startFrame when placing media at that marker.\n\nClip and track fields equal to their defaults are omitted: mediaType 'video', sourceClipType = mediaType, speed 1, volume 1, opacity 1, blendMode 'normal', trims/fades 0, identity transform/crop, default textStyle, track muted/hidden false. Text clips never report trims (no source media).\n\nCaption clips (sharing a captionGroupId) come back per track as captionGroups instead of clips entries: properties common to the group are hoisted into 'shared' and each clip is a [clipId, startFrame, durationFrames, text] row (caption box width/height are auto-fit per text and omitted). Rows are capped at 200 per group — when clipCount exceeds the rows shown, page with startFrame/endFrame. Caption clips whose properties deviate from the group appear individually in clips.",
+            description: "Always call at the start of a session. Returns project settings (fps, resolution, totalFrames), timeline markers, track list with types and order, all clips with their frames and properties, and canGenerate (if false, generation/upscale tools will fail — tell the user to sign in to Palmier and subscribe before attempting them). The clipId/trackId/markerId values here are what other tools accept.\n\nMarkers are exact project-frame anchors for placement; use a marker's frame as add_clips.startFrame when placing media at that marker. Dense generated beats are returned compactly as beatMarkerGroups with beatFormat [frame, beatIndex, strength], grouped by sourceClipId; ordinary markers remain in markers. Beat rows are capped at 500 per group and return nextStartFrame for paging with startFrame/endFrame. Grids automatically become inactive if their source clip timing changes.\n\nClip and track fields equal to their defaults are omitted: mediaType 'video', sourceClipType = mediaType, speed 1, volume 1, opacity 1, blendMode 'normal', trims/fades 0, identity transform/crop, default textStyle, track muted/hidden false. Text clips never report trims (no source media).\n\nCaption clips (sharing a captionGroupId) come back per track as captionGroups instead of clips entries: properties common to the group are hoisted into 'shared' and each clip is a [clipId, startFrame, durationFrames, text] row (caption box width/height are auto-fit per text and omitted). Rows are capped at 200 per group — when clipCount exceeds the rows shown, page with startFrame/endFrame. Caption clips whose properties deviate from the group appear individually in clips.",
             inputSchema: objectSchema(
                 properties: [
                     "startFrame": ["type": "integer", "description": "Optional. Window start (inclusive); only clips intersecting [startFrame, endFrame) are returned. Tracks report totalClips when the window hides some."],
@@ -111,7 +134,7 @@ enum ToolDefinitions {
         ),
         AgentTool(
             name: .removeMarkers,
-            description: "Deletes timeline markers by id. This only removes marker anchors; it never removes clips or media.",
+            description: "Deletes timeline markers by id, or removes all generated beat markers associated with one source clip. This only removes marker anchors; it never removes clips or media.",
             inputSchema: objectSchema(
                 properties: [
                     "markerIds": [
@@ -119,8 +142,41 @@ enum ToolDefinitions {
                         "items": ["type": "string"],
                         "description": "Marker ids from get_timeline.",
                     ],
+                    "sourceClipId": ["type": "string", "description": "Optional. Remove every generated beat marker from this timeline clip while preserving manual markers. May be combined with markerIds."],
+                ]
+            )
+        ),
+        AgentTool(
+            name: .detectBeats,
+            description: "Analyses a timeline music/audio clip on-device and returns its beat grid as exact PROJECT frames without changing the timeline. Analysis follows the clip's visible trim, speed, and position. Use these returned frames directly for beat-timed photo cuts; do not reconstruct a grid from BPM alone. Strength and confidence are 0...1. Beat detection does not claim musical bars or downbeats.",
+            inputSchema: objectSchema(
+                properties: [
+                    "clipId": ["type": "string", "description": "Timeline audio clip, or a video clip whose source has audio."],
+                    "minBPM": ["type": "number", "description": "Optional tempo search minimum (default 60, allowed 30...300)."],
+                    "maxBPM": ["type": "number", "description": "Optional tempo search maximum (default 200, allowed 30...300)."],
+                    "bpmOverride": ["type": "number", "description": "Optional known BPM (30...300). Resolves unavoidable half/double-tempo ambiguity; it does not invent beat phase."],
+                    "startFrame": ["type": "integer", "description": "Optional PROJECT-frame lower bound for returned rows. Analysis still uses the clip context."],
+                    "endFrame": ["type": "integer", "description": "Optional exclusive PROJECT-frame upper bound for returned rows. Page long grids with startFrame/endFrame."],
                 ],
-                required: ["markerIds"]
+                required: ["clipId"]
+            )
+        ),
+        AgentTool(
+            name: .addBeatMarkers,
+            description: "Analyses a timeline music/audio clip and atomically creates visible, snapping beat markers at exact PROJECT frames. Re-running safely replaces only generated beat markers from the same source clip; manual markers are preserved. Returns the selected cadence boundaries as compact rows so they can immediately drive photo placement. everyNthBeat controls editing cadence but does NOT mean downbeats or bars.",
+            inputSchema: objectSchema(
+                properties: [
+                    "clipId": ["type": "string", "description": "Timeline audio clip, or a video clip whose source has audio."],
+                    "everyNthBeat": ["type": "integer", "description": "Place every Nth detected beat, 1...16 (default 1). Photo montages often read better at 2 or 4."],
+                    "beatOffset": ["type": "integer", "description": "Offset within everyNthBeat, zero-based (default 0, must be less than everyNthBeat)."],
+                    "minBPM": ["type": "number", "description": "Optional tempo search minimum (default 60, allowed 30...300)."],
+                    "maxBPM": ["type": "number", "description": "Optional tempo search maximum (default 200, allowed 30...300)."],
+                    "bpmOverride": ["type": "number", "description": "Optional known BPM (30...300) to resolve half/double-tempo ambiguity."],
+                    "minimumConfidence": ["type": "number", "description": "Refuse marker creation below this confidence, 0.45...1 (default 0.45). A lower value requires explicit user acceptance and allowLowConfidence=true."],
+                    "allowLowConfidence": ["type": "boolean", "description": "Set true only when the user accepts an uncertain grid. Default false."],
+                    "color": ["type": "string", "description": "Optional marker hex color; defaults to Palmier audio green (#58A822)."],
+                ],
+                required: ["clipId"]
             )
         ),
         AgentTool(

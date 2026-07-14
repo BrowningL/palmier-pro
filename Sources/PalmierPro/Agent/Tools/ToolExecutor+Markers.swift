@@ -65,14 +65,31 @@ extension ToolExecutor {
     }
 
     func removeMarkers(_ editor: EditorViewModel, _ args: [String: Any]) throws -> ToolResult {
-        try validateUnknownKeys(args, allowed: ["markerIds"], path: "remove_markers")
+        try validateUnknownKeys(args, allowed: ["markerIds", "sourceClipId"], path: "remove_markers")
         let markerIds = args.stringArray("markerIds")
-        guard !markerIds.isEmpty else { throw ToolError("Missing or empty 'markerIds' array") }
+        let requestedSourceClipId = args.string("sourceClipId")
+        guard !markerIds.isEmpty || requestedSourceClipId != nil else {
+            throw ToolError("Provide markerIds or sourceClipId")
+        }
         for id in markerIds where editor.timelineMarker(id: id) == nil {
             throw ToolError("Marker not found: \(id)")
         }
-        editor.removeTimelineMarkers(ids: Set(markerIds))
-        return .ok(markerJSON(["removedMarkerIds": markerIds]))
+        // Linked video/audio halves share the audio clip's canonical beat grid.
+        // Keep the raw id as a fallback so stale grids remain removable after a clip deletion.
+        let sourceClipId = requestedSourceClipId.map {
+            editor.canonicalBeatSourceClipId(for: $0) ?? $0
+        }
+        if let sourceClipId { editor.beatMarkerRequestIds.removeValue(forKey: sourceClipId) }
+        let generated = sourceClipId.map { id in
+            editor.timeline.markers.filter { $0.kind == .beat && $0.sourceClipId == id }
+        } ?? []
+        let generatedCount = generated.count
+        let removalIds = Set(markerIds).union(generated.map(\.id))
+        editor.removeTimelineMarkers(ids: removalIds)
+        return .ok(markerJSON([
+            "removedMarkerIds": markerIds,
+            "removedGeneratedBeatMarkers": generatedCount,
+        ]))
     }
 
     private static func markerInfo(_ marker: TimelineMarker) -> [String: Any] {

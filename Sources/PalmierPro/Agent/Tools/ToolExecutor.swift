@@ -37,7 +37,7 @@ final class ToolExecutor {
             let resolved = try expandingIdPrefixes(in: args, editor: editor)
             result = try await run(tool, editor, resolved)
             // Record any edit that actually changed the timeline so `undo` can revert it.
-            if tool != .undo, !result.isError, editor.timeline != before,
+            if tool.canRecordTimelineUndo, !result.isError, editor.timeline != before,
                let actionName = editor.undoManager?.undoActionName {
                 agentUndoStack.append(actionName)
             }
@@ -78,6 +78,8 @@ final class ToolExecutor {
         case .addMarkers:    return try addMarkers(editor, args)
         case .setMarkerProperties: return try setMarkerProperties(editor, args)
         case .removeMarkers: return try removeMarkers(editor, args)
+        case .detectBeats:   return try await detectBeats(editor, args)
+        case .addBeatMarkers: return try await addBeatMarkers(editor, args)
         case .inspectMedia:  return try await inspectMedia(editor, args)
         case .getTranscript: return try await getTranscript(editor, args)
         case .inspectTimeline: return try await inspectTimeline(editor, args)

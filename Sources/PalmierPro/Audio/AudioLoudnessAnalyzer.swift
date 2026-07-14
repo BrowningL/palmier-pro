@@ -36,10 +36,6 @@ enum AudioLoudnessAnalyzer {
     static let sampleRate: Double = 48_000
     static let hopSeconds: Double = 0.1
 
-    // AVAssetReader can stall when a large parallel test/import workload opens
-    // too many media decoders. Keep this limit at the decoder boundary so every
-    // caller, not only Social Audio Mix, gets the same hardware-safe behavior.
-    private static let decoderGate = AsyncSemaphore(value: 2)
     private static let hopFrameCount = Int(sampleRate * hopSeconds)
     private static let absoluteGateLUFS = -70.0
     private static let relativeGateOffsetLU = -10.0
@@ -61,9 +57,6 @@ enum AudioLoudnessAnalyzer {
                 throw AudioLoudnessAnalyzerError.invalidRange
             }
         }
-
-        try await decoderGate.wait()
-        defer { Task { await decoderGate.signal() } }
 
         var accumulator = StreamingAccumulator(hopFrameCount: hopFrameCount)
         try await AudioTrackReader.read(from: url, outputSettings: [

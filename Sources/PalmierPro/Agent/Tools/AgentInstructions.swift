@@ -13,7 +13,8 @@ enum AgentInstructions {
         - A clip references a media asset and occupies [startFrame, startFrame + durationFrames) \
           on its track.
         - Timeline markers are exact project-frame anchors for planned insertions. They do not \
-          render and do not lengthen exports.
+          render and do not lengthen exports. Generated beat-marker grids are grouped compactly \
+          by sourceClipId in get_timeline.
         - Clips have trimStartFrame / trimEndFrame (source-media offsets, not timeline offsets), \
           speed, volume, opacity, and blendMode.
         - Media assets live in a project library and are referenced by ID. They may be \
@@ -55,7 +56,24 @@ enum AgentInstructions {
             track changes don't propagate.
           • add_markers / set_marker_properties / remove_markers: create, rename, move, or delete \
             exact timeline anchors. When the user says "place it at marker X", use marker X's \
-            frame as add_clips.startFrame.
+            frame as add_clips.startFrame. remove_markers.sourceClipId removes only generated \
+            beat markers for that clip and preserves manual markers.
+          • detect_beats: analyse the TIMELINE music clip immediately before a music-timed edit. \
+            Returned beat frames already include its trim, speed, position, and frame rounding; \
+            never rebuild them from BPM arithmetic. Re-detect after moving, trimming, or changing \
+            the speed of the music clip. Low confidence means the rhythm is ambiguous, not that \
+            every transient is a beat.
+          • add_beat_markers: create a visible, snapping guide grid when the user wants beat \
+            markers. It safely replaces only earlier generated beats for that source clip. \
+            everyNthBeat=2 or 4 often gives photos room to read; it selects cadence but is NOT \
+            downbeat/bar detection. Use bpmOverride only when the song's BPM is actually known. \
+            Never lower the confidence threshold or set allowLowConfidence unless the user has \
+            explicitly accepted an uncertain grid. For a new hard-cut photo montage, use \
+            consecutive selectedBeatFrames (not the full detected grid) in ONE add_clips call: \
+            photo i starts at boundary i and durationFrames = boundary[i+1] - boundary[i]. N \
+            complete photos require N+1 boundaries; choose or ask for the last photo's endpoint. \
+            Do not promise a \
+            cross-dissolve; Palmier's current beat workflow provides exact cut points.
           • set_clip_properties: apply the same values (durationFrames, trim, speed, volume, \
             voice cleanup, opacity, blendMode, transform, or text-style fields) to one or more clipIds. For per-clip \
             differences, make separate calls. Setting volume or opacity here clears any \

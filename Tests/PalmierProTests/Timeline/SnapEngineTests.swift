@@ -45,6 +45,85 @@ struct SnapEngineTests {
         #expect(frames == [100, 180])
     }
 
+    @Test func collectTargetsIncludesManualAndGeneratedBeatMarkers() {
+        let markers = [
+            TimelineMarker(frame: 24, label: "Manual"),
+            TimelineMarker(frame: 48, kind: .beat, sourceClipId: "song", beatIndex: 1),
+        ]
+        let targets = SnapEngine.collectTargets(tracks: [], markers: markers)
+
+        #expect(targets.map(\.frame) == [24, 48])
+        #expect(targets.allSatisfy { $0.kind == .marker })
+    }
+
+    @Test func findSnapUsesBeatMarkerAsExactTarget() {
+        let targets = SnapEngine.collectTargets(
+            tracks: [],
+            markers: [TimelineMarker(frame: 96, kind: .beat, sourceClipId: "song", beatIndex: 3)]
+        )
+        var state = SnapEngine.SnapState()
+        let result = SnapEngine.findSnap(
+            position: 95,
+            targets: targets,
+            state: &state,
+            baseThreshold: basePx,
+            pixelsPerFrame: pxPerFrame
+        )
+
+        #expect(result?.frame == 96)
+        #expect(state.currentlySnappedTo == 96)
+    }
+
+    @Test func movingBeatSourceMakesItsSignedGridInactive() {
+        let clip = Fixtures.clip(
+            id: "song", mediaRef: "song-media", mediaType: .audio,
+            start: 10, duration: 120
+        )
+        var timeline = Fixtures.timeline(fps: 30, tracks: [Fixtures.audioTrack(clips: [clip])])
+        timeline.markers = [TimelineMarker(
+            frame: 25,
+            kind: .beat,
+            sourceClipId: "song",
+            beatIndex: 1,
+            sourceTimingSignature: clip.beatMarkerTimingSignature(fps: timeline.fps)
+        )]
+
+        #expect(timeline.activeMarkers.count == 1)
+        timeline.tracks[0].clips[0].startFrame += 1
+        #expect(timeline.activeMarkers.isEmpty)
+        #expect(SnapEngine.collectTargets(
+            tracks: timeline.tracks,
+            markers: timeline.activeMarkers,
+            excludeClipIds: Set(timeline.tracks[0].clips.map(\.id))
+        ).isEmpty)
+    }
+
+    @Test func draggingBeatSourceDoesNotSnapToItsOwnGrid() {
+        let marker = TimelineMarker(
+            frame: 48, kind: .beat, sourceClipId: "song", beatIndex: 2
+        )
+        let targets = SnapEngine.collectTargets(
+            tracks: [], markers: [marker], excludeClipIds: ["song"]
+        )
+        #expect(targets.isEmpty)
+    }
+
+    @Test func overviewZoomSubsamplesDenseBeatSnapTargets() {
+        let beats = stride(from: 0, through: 300, by: 15).enumerated().map {
+            TimelineMarker(
+                frame: $0.element,
+                kind: .beat,
+                sourceClipId: "song",
+                beatIndex: $0.offset + 1
+            )
+        }
+        let targets = SnapEngine.collectTargets(
+            tracks: [], markers: beats, markerPixelsPerFrame: 0.1
+        )
+
+        #expect(targets.map(\.frame) == [0, 120, 240])
+    }
+
     // MARK: - findSnap (basic threshold)
 
     @Test func findSnapReturnsNilWhenNoTargets() {

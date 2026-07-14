@@ -154,6 +154,18 @@ Use `difference` with a white logo PNG to invert the background through the logo
 
 Markers are exact project-frame anchors. They do not render and do not lengthen exports.
 
+### Beat Detection and Beat Markers
+
+- UI: right-click an audio clip (or either half of a linked video/audio pair) and choose Create/Replace Beat Markers -> Every Beat, Every 2 Beats, or Every 4 Beats. Generated diamonds snap clip moves, trims, timeline ranges, razor cuts, and external drops; dense guides and snap targets are thinned only at overview zoom and every beat returns as you zoom in.
+- Analysis: `AudioBeatDetector` streams mono 22.05 kHz PCM through a 1024-sample Hann-windowed Accelerate DFT. Weighted low/mid/high spectral flux, adaptive novelty, autocorrelation tempo estimation, and a constrained fractional-period beat path provide the grid without loading the decoded song into memory.
+- Accuracy: subrange analysis uses tempo-sized real-audio preroll and strict visible-range filtering, so a trim boundary neither fabricates a beat nor admits a beat just before the cut. Decoder presentation timestamps preserve AAC priming/edit-list timing. Source seconds map through the clip's trim and effective rendered playback rate, then round once to exact project frames; short clips borrow at least four periods of nearby source context at the slowest requested tempo.
+- Performance: `AudioTrackReader` globally limits concurrent decoders. A small source-stat/range/tempo LRU caches completed analyses, so changing marker cadence does not decode or FFT the song again.
+- Safety: every generated marker stores source clip provenance and a timing signature. Moving, trimming, retiming, replacing, or deleting that clip makes its old grid inactive, while relinking the source retires its grid outright; stale beats neither draw, snap, nor reach the agent. Re-analysis atomically replaces the prior group while preserving manual markers, and direct removal wins over older in-flight analysis. Linked video/audio pairs canonicalize to their audio bearer to prevent duplicate grids.
+- Confidence: ordinary marker creation refuses confidence below 0.45. The UI explains the uncertainty and requires Create Anyway; the agent may bypass the gate only after explicit user acceptance. `bpmOverride` (30–300) resolves half/double-tempo ambiguity even outside the automatic search range, but does not identify musical bars or downbeats.
+- Agent/MCP: `detect_beats` is read-only and returns `[frame, beatIndex, strength]` rows already mapped to the project. `add_beat_markers` returns the selected cadence as `selectedBeatFrames`; `get_timeline` groups stored grids by source clip. Outputs cap beat rows at 500 and expose frame-window paging for long audio.
+- Editing contract: for hard-cut photos, N complete photos need N+1 consecutive selected boundaries; photo i starts at boundary i and lasts `boundary[i+1] - boundary[i]`. Palmier currently provides exact cut points, not a promised cross-dissolve transition model.
+- Tests: `AudioBeatDetectorTests`, `BeatMarkerToolTests`, `SnapEngineTests`, `ProjectRoundTripTests`, and `ToolExecutorTests` cover tempo/timing, AAC priming, stereo resampling, silence/steady-tone rejection, low-tempo context, trim/speed mapping, cache-safe cadence replacement, stale-grid invalidation, request races, persistence, snapping, compact agent output, and undo ownership.
+
 ### Voice Cleanup
 
 - Model: optional `Clip.voiceCleanup` with a persisted `VoiceCleanupSettings.strength` (0–1). Legacy projects decode with cleanup disabled.

@@ -132,11 +132,26 @@ struct ProjectRoundTripTests {
         var timeline = Fixtures.timeline()
         timeline.markers = [
             TimelineMarker(id: "m1", frame: 42, label: "Insert still", color: "#F29933"),
-            TimelineMarker(id: "m2", frame: 120, label: "Logo beat"),
+            TimelineMarker(
+                id: "m2", frame: 120, color: "#58A822", kind: .beat,
+                sourceClipId: "song-clip", beatIndex: 7, strength: 0.82,
+                sourceTimingSignature: "song|0|300|0|speed|30"
+            ),
         ]
 
         let decoded = try roundTrip(timeline)
         #expect(decoded.markers == timeline.markers)
+    }
+
+    @Test func legacyTimelineMarkerDefaultsToManualWithoutBeatProvenance() throws {
+        let json = #"{"id":"m1","frame":42,"label":"Legacy"}"#
+        let marker = try JSONDecoder().decode(TimelineMarker.self, from: Data(json.utf8))
+
+        #expect(marker.kind == .manual)
+        #expect(marker.sourceClipId == nil)
+        #expect(marker.beatIndex == nil)
+        #expect(marker.strength == nil)
+        #expect(marker.sourceTimingSignature == nil)
     }
 
     // MARK: - Legacy / tolerant decode

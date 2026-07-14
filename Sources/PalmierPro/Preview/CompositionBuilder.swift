@@ -340,9 +340,7 @@ enum CompositionBuilder {
             compTrack.insertEmptyTimeRange(CMTimeRange(start: cursor, duration: gap))
         }
 
-        let sourceFrames = clip.speed == 1.0
-            ? clip.durationFrames
-            : max(1, Int(Double(clip.durationFrames) * clip.speed))
+        let sourceFrames = clip.renderedSourceFramesConsumed
         let durationSeconds = Double(sourceFrames) / Double(timescale)
         let sourceDuration = CMTime(seconds: durationSeconds, preferredTimescale: sourceTimescale)
         let sourceRange = CMTimeRange(start: trimStart, duration: sourceDuration)

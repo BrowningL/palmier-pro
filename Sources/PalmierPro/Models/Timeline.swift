@@ -40,20 +40,49 @@ struct Timeline: Codable, Sendable, Equatable {
 }
 
 struct TimelineMarker: Codable, Sendable, Equatable, Identifiable {
+    enum Kind: String, Codable, Sendable {
+        case manual
+        case beat
+    }
+
     var id: String = UUID().uuidString
     var frame: Int
     var label: String = ""
     var color: String?
+    var kind: Kind = .manual
+    /// Beat provenance makes re-analysis replace only its own generated guides.
+    var sourceClipId: String?
+    var beatIndex: Int?
+    var strength: Double?
+    /// Timing fingerprint captured when a generated grid was analysed. A mismatch
+    /// makes the grid inactive, preventing old guides from snapping after edits.
+    var sourceTimingSignature: String?
 
-    init(id: String = UUID().uuidString, frame: Int, label: String = "", color: String? = nil) {
+    init(
+        id: String = UUID().uuidString,
+        frame: Int,
+        label: String = "",
+        color: String? = nil,
+        kind: Kind = .manual,
+        sourceClipId: String? = nil,
+        beatIndex: Int? = nil,
+        strength: Double? = nil,
+        sourceTimingSignature: String? = nil
+    ) {
         self.id = id
         self.frame = frame
         self.label = label
         self.color = color
+        self.kind = kind
+        self.sourceClipId = sourceClipId
+        self.beatIndex = beatIndex
+        self.strength = strength
+        self.sourceTimingSignature = sourceTimingSignature
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, frame, label, color
+        case id, frame, label, color, kind, sourceClipId, beatIndex, strength
+        case sourceTimingSignature
     }
 }
 
@@ -64,8 +93,43 @@ extension TimelineMarker {
             id: (try? c.decode(String.self, forKey: .id)) ?? UUID().uuidString,
             frame: (try? c.decode(Int.self, forKey: .frame)) ?? 0,
             label: (try? c.decode(String.self, forKey: .label)) ?? "",
-            color: try? c.decode(String.self, forKey: .color)
+            color: try? c.decode(String.self, forKey: .color),
+            kind: (try? c.decode(Kind.self, forKey: .kind)) ?? .manual,
+            sourceClipId: try? c.decode(String.self, forKey: .sourceClipId),
+            beatIndex: try? c.decode(Int.self, forKey: .beatIndex),
+            strength: try? c.decode(Double.self, forKey: .strength),
+            sourceTimingSignature: try? c.decode(String.self, forKey: .sourceTimingSignature)
         )
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(frame, forKey: .frame)
+        try c.encode(label, forKey: .label)
+        try c.encodeIfPresent(color, forKey: .color)
+        if kind != .manual { try c.encode(kind, forKey: .kind) }
+        try c.encodeIfPresent(sourceClipId, forKey: .sourceClipId)
+        try c.encodeIfPresent(beatIndex, forKey: .beatIndex)
+        try c.encodeIfPresent(strength, forKey: .strength)
+        try c.encodeIfPresent(sourceTimingSignature, forKey: .sourceTimingSignature)
+    }
+}
+
+extension Timeline {
+    /// Manual markers and generated grids whose source timing still matches.
+    /// Legacy beat markers without a signature remain visible for compatibility.
+    var activeMarkers: [TimelineMarker] {
+        var timingByClipId: [String: String] = [:]
+        for clip in tracks.flatMap(\.clips) {
+            timingByClipId[clip.id] = clip.beatMarkerTimingSignature(fps: fps)
+        }
+        return markers.filter { marker in
+            guard marker.kind == .beat,
+                  let sourceClipId = marker.sourceClipId,
+                  let signature = marker.sourceTimingSignature else { return true }
+            return timingByClipId[sourceClipId] == signature
+        }
     }
 }
 
@@ -173,6 +237,19 @@ struct Clip: Codable, Sendable, Equatable, Identifiable {
 
     /// Source frames consumed by the visible portion
     var sourceFramesConsumed: Int { Int((Double(durationFrames) * speed).rounded()) }
+
+    /// Integer source span inserted by CompositionBuilder. AVFoundation receives
+    /// the authored frame product truncated toward zero, then scales that span to
+    /// the timeline duration; beat mapping must use this same render invariant.
+    var renderedSourceFramesConsumed: Int {
+        speed == 1 ? durationFrames : max(1, Int(Double(durationFrames) * speed))
+    }
+
+    /// Effective rate actually rendered after the integer source span is scaled
+    /// to the integer timeline duration.
+    var effectivePlaybackSpeed: Double {
+        Double(renderedSourceFramesConsumed) / Double(max(1, durationFrames))
+    }
 
     /// Total source frames the clip references, including both trims.
     var sourceDurationFrames: Int { sourceFramesConsumed + trimStartFrame + trimEndFrame }
@@ -282,10 +359,15 @@ struct Clip: Codable, Sendable, Equatable, Identifiable {
     func timelineFrame(sourceSeconds t: Double, fps: Int) -> Int? {
         let sourceFrame = t * Double(fps)
         let offsetFromTrim = sourceFrame - Double(trimStartFrame)
-        guard offsetFromTrim >= 0 else { return nil }
-        let frame = Int((Double(startFrame) + offsetFromTrim / max(speed, 0.0001)).rounded())
+        let frame = Int((Double(startFrame) + offsetFromTrim / max(effectivePlaybackSpeed, 0.0001)).rounded())
         guard frame >= startFrame && frame < endFrame else { return nil }
         return frame
+    }
+
+    /// Stable persisted signature for invalidating generated beat guides when
+    /// placement, trim, duration, speed, media, or project frame rate changes.
+    func beatMarkerTimingSignature(fps: Int) -> String {
+        "\(mediaRef)|\(startFrame)|\(durationFrames)|\(trimStartFrame)|\(speed.bitPattern)|\(fps)"
     }
 }
 

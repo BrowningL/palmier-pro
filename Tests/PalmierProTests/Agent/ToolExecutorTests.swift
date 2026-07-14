@@ -382,6 +382,31 @@ struct ToolExecutorReadOnlyTests {
         #expect(windowed?["totalMarkers"] as? Int == 2)
     }
 
+    @Test func getTimelineCompactsGeneratedBeatMarkersBySourceClip() async throws {
+        var timeline = Fixtures.timeline(tracks: [
+            Fixtures.audioTrack(clips: [Fixtures.clip(id: "song", mediaType: .audio, start: 0, duration: 300)]),
+        ])
+        timeline.markers = [
+            TimelineMarker(id: "manual", frame: 10, label: "Intro"),
+            TimelineMarker(id: "beat-1", frame: 30, kind: .beat, sourceClipId: "song", beatIndex: 1, strength: 0.9),
+            TimelineMarker(id: "beat-2", frame: 45, kind: .beat, sourceClipId: "song", beatIndex: 2, strength: 0.5),
+        ]
+        let h = ToolHarness(timeline: timeline)
+
+        let full = try await h.runOK("get_timeline") as? [String: Any]
+        #expect((full?["markers"] as? [[String: Any]])?.map { $0["id"] as? String } == ["manual"])
+        let group = (full?["beatMarkerGroups"] as? [[String: Any]])?.first
+        #expect(group?["sourceClipId"] as? String == "song")
+        #expect(group?["beatCount"] as? Int == 2)
+        #expect((group?["beats"] as? [[Any]])?.count == 2)
+
+        let windowed = try await h.runOK("get_timeline", args: ["startFrame": 40, "endFrame": 60]) as? [String: Any]
+        #expect(windowed?["markers"] == nil)
+        let windowedGroup = (windowed?["beatMarkerGroups"] as? [[String: Any]])?.first
+        #expect(windowedGroup?["windowBeatCount"] as? Int == 1)
+        #expect(windowed?["totalMarkers"] as? Int == 3)
+    }
+
     private static func firstTrack(_ json: [String: Any]?) -> [String: Any]? {
         (json?["tracks"] as? [[String: Any]])?.first
     }
@@ -589,6 +614,20 @@ struct ToolExecutorMarkerTests {
 
         #expect(h.editor.timeline.markers.map(\.id) == [second.id])
         #expect(h.editor.timeline.tracks[0].clips[0].id == "clip-1")
+    }
+
+    @Test func removeMarkersBySourceClipPreservesManualAndOtherBeatMarkers() async throws {
+        let h = ToolHarness()
+        h.editor.timeline.markers = [
+            TimelineMarker(id: "manual", frame: 1, label: "Keep"),
+            TimelineMarker(id: "song-a-1", frame: 10, kind: .beat, sourceClipId: "song-a", beatIndex: 1),
+            TimelineMarker(id: "song-a-2", frame: 20, kind: .beat, sourceClipId: "song-a", beatIndex: 2),
+            TimelineMarker(id: "song-b-1", frame: 30, kind: .beat, sourceClipId: "song-b", beatIndex: 1),
+        ]
+
+        _ = try await h.runOK("remove_markers", args: ["sourceClipId": "song-a"])
+
+        #expect(h.editor.timeline.markers.map(\.id) == ["manual", "song-b-1"])
     }
 
     @Test func markerToolsRejectUnknownMarkerIds() async {

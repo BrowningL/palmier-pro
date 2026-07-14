@@ -31,7 +31,10 @@ extension ToolExecutor {
                 if let linkGroupId = clip.linkGroupId { ids.insert(linkGroupId) }
             }
         }
-        for marker in editor.timeline.markers { ids.insert(marker.id) }
+        for marker in editor.timeline.markers {
+            ids.insert(marker.id)
+            if let sourceClipId = marker.sourceClipId { ids.insert(sourceClipId) }
+        }
         for asset in editor.mediaAssets { ids.insert(asset.id) }
         for folder in editor.folders { ids.insert(folder.id) }
         return ids

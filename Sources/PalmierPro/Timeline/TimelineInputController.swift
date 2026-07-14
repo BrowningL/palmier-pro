@@ -221,8 +221,10 @@ final class TimelineInputController {
         case .timelineRange(let drag):
             let targets = SnapEngine.collectTargets(
                 tracks: editor.timeline.tracks,
+                markers: editor.timeline.activeMarkers,
                 playheadFrame: editor.currentFrame,
-                includePlayhead: true
+                includePlayhead: true,
+                markerPixelsPerFrame: geometry.pixelsPerFrame
             )
             let rangeEndFrame: Int
             if let snap = SnapEngine.findSnap(
@@ -245,9 +247,11 @@ final class TimelineInputController {
             let allDraggedIds = Set(drag.all.map(\.clipId))
             let targets = SnapEngine.collectTargets(
                 tracks: editor.timeline.tracks,
+                markers: editor.timeline.activeMarkers,
                 playheadFrame: editor.currentFrame,
                 excludeClipIds: allDraggedIds,
-                includePlayhead: true
+                includePlayhead: true,
+                markerPixelsPerFrame: geometry.pixelsPerFrame
             )
 
             // Let any selected edge drive snapping, not just the lead start.
@@ -291,9 +295,11 @@ final class TimelineInputController {
             let candidateStart = frame
             let targets = SnapEngine.collectTargets(
                 tracks: editor.timeline.tracks,
+                markers: editor.timeline.activeMarkers,
                 playheadFrame: editor.currentFrame,
                 excludeClipIds: [drag.clipId],
-                includePlayhead: true
+                includePlayhead: true,
+                markerPixelsPerFrame: geometry.pixelsPerFrame
             )
             let snappedStart: Int
             if let snap = SnapEngine.findSnap(
@@ -320,9 +326,11 @@ final class TimelineInputController {
             let candidateEnd = max(drag.originalStartFrame + 1, frame)
             let targets = SnapEngine.collectTargets(
                 tracks: editor.timeline.tracks,
+                markers: editor.timeline.activeMarkers,
                 playheadFrame: editor.currentFrame,
                 excludeClipIds: [drag.clipId],
-                includePlayhead: true
+                includePlayhead: true,
+                markerPixelsPerFrame: geometry.pixelsPerFrame
             )
             let snappedEnd: Int
             if let snap = SnapEngine.findSnap(
@@ -529,8 +537,10 @@ final class TimelineInputController {
             let candidate = geometry.frameAt(x: point.x)
             let targets = SnapEngine.collectTargets(
                 tracks: editor.timeline.tracks,
+                markers: editor.timeline.activeMarkers,
                 playheadFrame: editor.currentFrame,
-                includePlayhead: true
+                includePlayhead: true,
+                markerPixelsPerFrame: geometry.pixelsPerFrame
             )
             if let snap = SnapEngine.findSnap(
                 position: candidate,

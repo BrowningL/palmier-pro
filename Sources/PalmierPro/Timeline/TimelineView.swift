@@ -113,7 +113,7 @@ final class TimelineView: NSView {
             }
         }
 
-        let markerExtent = editor.timeline.markers.map(\.frame).max().map { $0 + 1 } ?? 0
+        let markerExtent = editor.timeline.activeMarkers.map(\.frame).max().map { $0 + 1 } ?? 0
         let totalFrames = max(editor.timeline.totalFrames, markerExtent)
         let contentWidth = editor.zoomScale * Double(totalFrames) + visibleSize.width * 0.5
         let geo = geometry
@@ -517,7 +517,8 @@ final class TimelineView: NSView {
         visibleWidth: CGFloat,
         context ctx: CGContext
     ) {
-        guard !editor.timeline.markers.isEmpty else { return }
+        let activeMarkers = editor.timeline.activeMarkers
+        guard !activeMarkers.isEmpty else { return }
         let visibleHeight = enclosingScrollView?.contentView.bounds.height ?? bounds.height
         let minX = Double(scrollOffset.x) - 48
         let maxX = Double(scrollOffset.x + visibleWidth) + 160
@@ -525,20 +526,28 @@ final class TimelineView: NSView {
         let rulerMaxY = rulerMinY + Double(geo.rulerHeight)
         let bodyMaxY = Double(scrollOffset.y + visibleHeight)
 
-        for marker in editor.timeline.markers {
+        var lastDrawnBeatX = -Double.infinity
+        for marker in activeMarkers {
             let x = geo.xForFrame(marker.frame)
             guard x >= minX, x <= maxX else { continue }
 
             let color = timelineMarkerColor(marker)
-            ctx.setStrokeColor(color.withAlphaComponent(0.68).cgColor)
+            let isBeat = marker.kind == .beat
+            // At overview zoom, avoid turning hundreds of sub-pixel guides into
+            // an opaque green wash. Zooming in reveals every beat again.
+            if isBeat, x - lastDrawnBeatX < 3 { continue }
+            if isBeat { lastDrawnBeatX = x }
+            let beatStrength = max(0, min(1, marker.strength ?? 0))
+            let guideAlpha = isBeat ? 0.14 + beatStrength * 0.24 : 0.68
+            ctx.setStrokeColor(color.withAlphaComponent(guideAlpha).cgColor)
             ctx.setLineWidth(AppTheme.BorderWidth.thin)
             ctx.move(to: CGPoint(x: x, y: rulerMaxY))
             ctx.addLine(to: CGPoint(x: x, y: bodyMaxY))
             ctx.strokePath()
 
             ctx.setFillColor(color.cgColor)
-            let w = 9.0
-            let top = rulerMinY + 4
+            let w = isBeat ? 6.0 : 9.0
+            let top = rulerMinY + (isBeat ? 7 : 4)
             let markerPath = CGMutablePath()
             markerPath.move(to: CGPoint(x: x, y: top))
             markerPath.addLine(to: CGPoint(x: x - w * 0.5, y: top + 7))
@@ -548,6 +557,9 @@ final class TimelineView: NSView {
             ctx.addPath(markerPath)
             ctx.fillPath()
 
+            // Generated grids can contain hundreds of beats. Their diamonds and
+            // guides carry the timing; repeated labels would make the ruler unreadable.
+            guard !isBeat else { continue }
             let label = editor.markerDisplayLabel(marker)
             guard !label.isEmpty, geo.pixelsPerFrame >= 0.75 else { continue }
             let attrs: [NSAttributedString.Key: Any] = [
@@ -969,6 +981,31 @@ final class TimelineView: NSView {
         }
         // Sync
         var syncItems: [NSMenuItem] = []
+        if editor.canDetectBeats(clipId: clip.id),
+           let beatSourceClipId = editor.canonicalBeatSourceClipId(for: clip.id) {
+            let hasBeatMarkers = !editor.generatedBeatMarkers(sourceClipId: beatSourceClipId).isEmpty
+            let beatItem = NSMenuItem(
+                title: hasBeatMarkers ? "Replace Beat Markers" : "Create Beat Markers",
+                action: nil,
+                keyEquivalent: ""
+            )
+            let beatMenu = NSMenu()
+            for (title, every) in [("Every Beat", 1), ("Every 2 Beats", 2), ("Every 4 Beats", 4)] {
+                let item = NSMenuItem(title: title, action: #selector(performAddBeatMarkers(_:)), keyEquivalent: "")
+                item.target = self
+                item.representedObject = ["clipId": beatSourceClipId, "everyNthBeat": every] as [String: Any]
+                beatMenu.addItem(item)
+            }
+            if hasBeatMarkers {
+                beatMenu.addItem(.separator())
+                let remove = NSMenuItem(title: "Remove Beat Markers", action: #selector(performRemoveBeatMarkers(_:)), keyEquivalent: "")
+                remove.target = self
+                remove.representedObject = beatSourceClipId
+                beatMenu.addItem(remove)
+            }
+            beatItem.submenu = beatMenu
+            syncItems.append(beatItem)
+        }
         if let pair = editor.audioSyncSelection() {
             let syncItem = NSMenuItem(title: "Synchronize", action: #selector(performSynchronize(_:)), keyEquivalent: "")
             syncItem.target = self
@@ -991,20 +1028,30 @@ final class TimelineView: NSView {
     private func rulerMenu(frame: Int, marker: TimelineMarker?) -> NSMenu {
         let menu = NSMenu()
         if let marker {
-            let goItem = NSMenuItem(title: "Go to Marker", action: #selector(performGoToMarker(_:)), keyEquivalent: "")
+            let isBeat = marker.kind == .beat
+            let goItem = NSMenuItem(title: isBeat ? "Go to Beat" : "Go to Marker", action: #selector(performGoToMarker(_:)), keyEquivalent: "")
             goItem.target = self
             goItem.representedObject = marker.id
             menu.addItem(goItem)
 
-            let renameItem = NSMenuItem(title: "Rename Marker...", action: #selector(performRenameMarker(_:)), keyEquivalent: "")
-            renameItem.target = self
-            renameItem.representedObject = marker.id
-            menu.addItem(renameItem)
+            if !isBeat {
+                let renameItem = NSMenuItem(title: "Rename Marker...", action: #selector(performRenameMarker(_:)), keyEquivalent: "")
+                renameItem.target = self
+                renameItem.representedObject = marker.id
+                menu.addItem(renameItem)
+            }
 
-            let deleteItem = NSMenuItem(title: "Delete Marker", action: #selector(performDeleteMarker(_:)), keyEquivalent: "")
+            let deleteItem = NSMenuItem(title: isBeat ? "Delete Beat Marker" : "Delete Marker", action: #selector(performDeleteMarker(_:)), keyEquivalent: "")
             deleteItem.target = self
             deleteItem.representedObject = marker.id
             menu.addItem(deleteItem)
+
+            if isBeat, let sourceClipId = marker.sourceClipId {
+                let deleteAllItem = NSMenuItem(title: "Delete All Beat Markers for Clip", action: #selector(performDeleteBeatMarkerGroup(_:)), keyEquivalent: "")
+                deleteAllItem.target = self
+                deleteAllItem.representedObject = sourceClipId
+                menu.addItem(deleteAllItem)
+            }
 
             menu.addItem(.separator())
         }
@@ -1019,7 +1066,7 @@ final class TimelineView: NSView {
     private func markerHit(at point: NSPoint, geometry geo: TimelineGeometry, scrollOffsetY: CGFloat) -> TimelineMarker? {
         guard point.y >= scrollOffsetY, point.y < scrollOffsetY + geo.rulerHeight else { return nil }
         let slop = max(6.0, min(14.0, 3.0 / geo.pixelsPerFrame))
-        return editor.timeline.markers
+        return editor.timeline.activeMarkers
             .map { marker in (marker, abs(geo.xForFrame(marker.frame) - Double(point.x))) }
             .filter { $0.1 <= slop }
             .sorted { $0.1 < $1.1 }
@@ -1167,6 +1214,12 @@ final class TimelineView: NSView {
         needsDisplay = true
     }
 
+    @objc private func performDeleteBeatMarkerGroup(_ sender: Any?) {
+        guard let sourceClipId = (sender as? NSMenuItem)?.representedObject as? String else { return }
+        editor.removeGeneratedBeatMarkers(sourceClipId: sourceClipId)
+        needsDisplay = true
+    }
+
     @objc private func performGoToMarker(_ sender: Any?) {
         guard let markerId = (sender as? NSMenuItem)?.representedObject as? String,
               let marker = editor.timelineMarker(id: markerId) else { return }
@@ -1296,7 +1349,9 @@ final class TimelineView: NSView {
         }
         let totalDur = assets.reduce(0) { $0 + editor.clipDurationFrames(for: $1, segment: externalDragSegments[$1.id]) }
         let targets = SnapEngine.collectTargets(
-            tracks: editor.timeline.tracks
+            tracks: editor.timeline.tracks,
+            markers: editor.timeline.activeMarkers,
+            markerPixelsPerFrame: geometry.pixelsPerFrame
         )
         if let snap = SnapEngine.findSnap(
             position: candidate,

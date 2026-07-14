@@ -32,6 +32,18 @@ extension EditorViewModel {
 
     private func applyRelink(id: String, to newURL: URL) {
         guard let i = mediaAssets.firstIndex(where: { $0.id == id }) else { return }
+        // Beat guides describe the old audio content, not merely this stable asset
+        // id. Relinking must retire them even when clip placement is unchanged.
+        let sourceClipIds: Set<String> = Set(timeline.tracks.flatMap(\.clips).compactMap { clip in
+            clip.mediaRef == id ? clip.id : nil
+        })
+        for sourceClipId in sourceClipIds {
+            beatMarkerRequestIds.removeValue(forKey: sourceClipId)
+        }
+        timeline.markers.removeAll { marker in
+            marker.kind == .beat
+                && marker.sourceClipId.map(sourceClipIds.contains) == true
+        }
         mediaAssets[i].url = newURL
         if let j = mediaManifest.entries.firstIndex(where: { $0.id == id }) {
             mediaManifest.entries[j].source = mediaAssets[i].toManifestEntry(projectURL: projectURL).source

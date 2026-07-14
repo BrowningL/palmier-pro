@@ -121,6 +121,9 @@ final class EditorViewModel {
     var unprocessableMediaRefs: Set<String> = []
     var missingMediaRefs: Set<String> = []
     @ObservationIgnored var missingMediaRefreshTask: Task<Void, Never>?
+    /// Latest beat-marker mutation per canonical audio clip. Prevents an older,
+    /// slower analysis from overwriting a newer cadence request.
+    @ObservationIgnored var beatMarkerRequestIds: [String: UUID] = [:]
     let mediaVisualCache = MediaVisualCache()
     let searchIndex = SearchIndexCoordinator()
     var projectURL: URL? {
