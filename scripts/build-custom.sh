@@ -68,7 +68,9 @@ prefetch_speech_core() {
 # checksum-verified artifact cache so clean-Mac builds are deterministic.
 prefetch_speech_core
 
-"$ROOT/scripts/bundle.sh" "$CONFIG"
+# A personal fork does not need Palmier's production analytics SDKs. Keep the
+# release optimizer and bundled speech while avoiding their binary/runtime cost.
+PALMIER_BUILD_TRAITS_OVERRIDE="BundledSpeech" "$ROOT/scripts/bundle.sh" "$CONFIG"
 
 SOURCE_APP="$ROOT/.build/PalmierPro.app"
 CUSTOM_APP="$OUTPUT_DIR/PalmierPro-Custom.app"

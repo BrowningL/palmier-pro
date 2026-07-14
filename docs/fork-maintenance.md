@@ -26,7 +26,7 @@ Resolve conflicts by retaining upstream architecture and reapplying the smallest
 
 ## Building the transferable app
 
-The custom wrapper builds Palmier Pro with bundled on-device speech models, stamps both source revisions, disables the official updater, verifies resources and code signing, then emits a ZIP and SHA-256 file:
+The custom wrapper builds Palmier Pro with release optimization and bundled on-device speech models, but without Palmier's production analytics SDKs. It stamps both source revisions, disables the official updater, verifies resources and code signing, then emits a ZIP and SHA-256 file:
 
 ```bash
 scripts/build-custom.sh release

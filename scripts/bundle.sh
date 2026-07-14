@@ -51,6 +51,9 @@ TRAITS="BundledSpeech"
 if [ "$CONFIG" = "release" ]; then
   TRAITS="$TRAITS,ProductionTelemetry"
 fi
+if [ -n "${PALMIER_BUILD_TRAITS_OVERRIDE:-}" ]; then
+  TRAITS="$PALMIER_BUILD_TRAITS_OVERRIDE"
+fi
 BUILD_ARGS=(-c "$CONFIG" --traits "$TRAITS")
 swift build "${BUILD_ARGS[@]}"
 BIN="$(swift build "${BUILD_ARGS[@]}" --show-bin-path)/PalmierPro"
