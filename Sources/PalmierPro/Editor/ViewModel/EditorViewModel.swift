@@ -432,6 +432,7 @@ final class EditorViewModel {
 
     /// Coalesces rapid rebuild requests so `replaceCurrentItem` doesn't fire per keystroke.
     var pendingRebuildTask: Task<Void, Never>?
+    @ObservationIgnored var beatMarkerRequestIds: [String: UUID] = [:]
 
     func notifyTimelineChanged(refreshVisuals: Bool = true) {
         guard undoManager?.isUndoRegistrationEnabled ?? true else { return }

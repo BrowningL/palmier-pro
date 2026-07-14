@@ -98,8 +98,17 @@ struct EffectModelTests {
             for spec in descriptor.params {
                 #expect(spec.range.contains(spec.defaultValue),
                         "\(descriptor.id).\(spec.key) default outside range")
+                if let choices = spec.choices {
+                    #expect(spec.step == 1, "\(descriptor.id).\(spec.key) choices require integer steps")
+                    #expect(choices.count == Int(spec.range.upperBound - spec.range.lowerBound) + 1)
+                }
             }
         }
+    }
+
+    @Test func darkLumaKeyRemainsCompatibleButUnpublished() {
+        #expect(EffectRegistry.descriptor(id: "key.lumaDark") != nil)
+        #expect(!EffectRegistry.all.contains { $0.id == "key.lumaDark" })
     }
 }
 
@@ -161,6 +170,9 @@ struct EffectRenderingTests {
             "stylize.vignette": ["amount": -1, "midpoint": 0.2],
             "stylize.grain": ["amount": 1, "size": 1.5],
             "detail.clarity": ["clarity": 1, "dehaze": 0],
+            "key.person": ["strength": 1, "mode": 0, "quality": 0],
+            "key.luma": ["threshold": 0.4, "softness": 0],
+            "key.lumaDark": ["threshold": 0.6, "softness": 0],
             "key.chroma": ["keyHue": 0.333, "tolerance": 0.5],
             "stylize.glow": ["intensity": 1, "radius": 20, "threshold": 0],
             "blur.noiseReduction": ["amount": 1],
@@ -184,7 +196,9 @@ struct EffectRenderingTests {
 
         // Vibrance's delta is the least predictable across renderers, so render it
         // (catches a bad filter key) but don't assert a pixel change.
-        let noOpOnSaturated: Set<String> = ["color.vibrance"]
+        // Person segmentation intentionally passes the source through when Vision finds no
+        // subject, so this synthetic solid frame cannot require a pixel delta from key.person.
+        let noOpOnSaturated: Set<String> = ["color.vibrance", "key.person"]
         // color.curves / color.hueCurves carry JSON curves, not Double params — covered by their own tests.
         let jsonCurveEffects: Set<String> = ["color.curves", "color.hueCurves"]
         let base = try await frame(nil)

@@ -9,12 +9,12 @@ extension ToolExecutor {
         "mediaRef", "startFrameMediaRef", "endFrameMediaRef",
         "sourceVideoMediaRef", "videoSourceMediaRef", "sourceMediaRef",
         "captionGroupId", "timelineId", "trackId", "item", "from", "reference",
-        "groupId", "memberId",
+        "groupId", "memberId", "markerId",
     ]
     private static let arrayIdKeys: Set<String> = [
         "clipIds", "targetClipIds", "items", "ids", "deletes",
         "referenceMediaRefs", "referenceImageMediaRefs",
-        "referenceVideoMediaRefs", "referenceAudioMediaRefs",
+        "referenceVideoMediaRefs", "referenceAudioMediaRefs", "markerIds", "removedMarkerIds",
     ]
 
     /// Returns all ids visible to the agent.
@@ -29,6 +29,7 @@ extension ToolExecutor {
                 if let linkGroupId = clip.linkGroupId { ids.insert(linkGroupId) }
             }
         }
+        for marker in editor.timeline.markers { ids.insert(marker.id) }
         for asset in editor.mediaAssets { ids.insert(asset.id) }
         for group in editor.multicamGroups {
             ids.insert(group.id)

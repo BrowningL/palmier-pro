@@ -78,6 +78,23 @@ extension InspectorView {
         ]
     }
 
+    private var personKeyControls: [EffectControl] {
+        [
+            EffectControl(effectId: "key.person", paramKey: "strength", label: "Strength"),
+            EffectControl(effectId: "key.person", paramKey: "mode", label: "Mode"),
+            EffectControl(effectId: "key.person", paramKey: "feather", label: "Feather"),
+            EffectControl(effectId: "key.person", paramKey: "shift", label: "Edge Shift"),
+            EffectControl(effectId: "key.person", paramKey: "quality", label: "Quality"),
+        ]
+    }
+
+    private var lumaKeyControls: [EffectControl] {
+        [
+            EffectControl(effectId: "key.luma", paramKey: "threshold", label: "White Threshold"),
+            EffectControl(effectId: "key.luma", paramKey: "softness", label: "Softness"),
+        ]
+    }
+
     private var grainControls: [EffectControl] {
         [
             EffectControl(effectId: "stylize.grain", paramKey: "amount", label: "Amount"),
@@ -99,7 +116,8 @@ extension InspectorView {
     }
 
     private var effectsEffectIds: Set<String> {
-        Set((detailControls + blurControls + motionBlurControls + vignetteControls + grainControls + glowControls + chromaKeyControls).map(\.effectId))
+        Set((detailControls + blurControls + motionBlurControls + vignetteControls + grainControls + glowControls
+            + personKeyControls + lumaKeyControls + chromaKeyControls).map(\.effectId))
     }
 
     @ViewBuilder
@@ -130,6 +148,8 @@ extension InspectorView {
                 adjustSubgroup(title: "Vignette", controls: vignetteControls, clips: clips)
                 adjustSubgroup(title: "Film Grain", controls: grainControls, clips: clips)
                 adjustSubgroup(title: "Glow", controls: glowControls, clips: clips)
+                adjustSubgroup(title: "Remove Background (Experimental)", controls: personKeyControls, clips: clips)
+                adjustSubgroup(title: "Luma Key", controls: lumaKeyControls, clips: clips)
                 adjustSubgroup(title: "Chroma Key", controls: chromaKeyControls, clips: clips)
             }
         }
@@ -496,31 +516,58 @@ extension InspectorView {
         if let descriptor = EffectRegistry.descriptor(id: control.effectId),
            let spec = descriptor.params.first(where: { $0.key == control.paramKey }) {
             let label = control.label ?? spec.label
-            HStack(spacing: AppTheme.Spacing.sm) {
-                Text(label)
-                    .font(.system(size: AppTheme.FontSize.sm))
-                    .foregroundStyle(AppTheme.Text.secondaryColor)
-                    .lineLimit(1)
-                    .frame(width: AppTheme.Slider.labelColumn, alignment: .leading)
-                AdjustSlider(
-                    value: sharedClipValue(clips) { controlValue($0, control, spec) } ?? spec.defaultValue,
-                    range: spec.range,
-                    gradient: control.gradient,
-                    defaultValue: spec.defaultValue,
-                    onChanged: { setControlParam(control, label: label, value: $0, clips: clips, commit: false) },
-                    onCommit: { setControlParam(control, label: label, value: $0, clips: clips, commit: true) }
-                )
-                ScrubbableNumberField(
-                    value: sharedClipValue(clips) { controlValue($0, control, spec) },
-                    range: spec.range,
-                    format: effectParamFormat(spec),
-                    valueSuffix: spec.unit.isEmpty ? "" : " \(spec.unit)",
-                    dragSensitivity: effectParamSensitivity(spec),
-                    fieldWidth: 50,
-                    onChanged: { setControlParam(control, label: label, value: $0, clips: clips, commit: false) }
-                ) { setControlParam(control, label: label, value: $0, clips: clips, commit: true) }
+            if let choices = spec.choices {
+                HStack(spacing: AppTheme.Spacing.sm) {
+                    Text(label)
+                        .font(.system(size: AppTheme.FontSize.sm))
+                        .foregroundStyle(AppTheme.Text.secondaryColor)
+                        .lineLimit(1)
+                        .frame(width: AppTheme.Slider.labelColumn, alignment: .leading)
+                    Picker("", selection: Binding(
+                        get: {
+                            Int((sharedClipValue(clips) { controlValue($0, control, spec) }
+                                ?? spec.defaultValue).rounded())
+                        },
+                        set: {
+                            setControlParam(control, label: label, value: Double($0), clips: clips, commit: true)
+                        }
+                    )) {
+                        ForEach(Array(choices.enumerated()), id: \.offset) { index, choice in
+                            Text(choice).tag(index)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(height: KeyframesMetrics.rowHeight)
+            } else {
+                HStack(spacing: AppTheme.Spacing.sm) {
+                    Text(label)
+                        .font(.system(size: AppTheme.FontSize.sm))
+                        .foregroundStyle(AppTheme.Text.secondaryColor)
+                        .lineLimit(1)
+                        .frame(width: AppTheme.Slider.labelColumn, alignment: .leading)
+                    AdjustSlider(
+                        value: sharedClipValue(clips) { controlValue($0, control, spec) } ?? spec.defaultValue,
+                        range: spec.range,
+                        gradient: control.gradient,
+                        defaultValue: spec.defaultValue,
+                        onChanged: { setControlParam(control, label: label, value: $0, clips: clips, commit: false) },
+                        onCommit: { setControlParam(control, label: label, value: $0, clips: clips, commit: true) }
+                    )
+                    ScrubbableNumberField(
+                        value: sharedClipValue(clips) { controlValue($0, control, spec) },
+                        range: spec.range,
+                        format: effectParamFormat(spec),
+                        valueSuffix: spec.unit.isEmpty ? "" : " \(spec.unit)",
+                        dragSensitivity: effectParamSensitivity(spec),
+                        fieldWidth: 50,
+                        onChanged: { setControlParam(control, label: label, value: $0, clips: clips, commit: false) }
+                    ) { setControlParam(control, label: label, value: $0, clips: clips, commit: true) }
+                }
+                .frame(height: KeyframesMetrics.rowHeight)
             }
-            .frame(height: KeyframesMetrics.rowHeight)
         }
     }
 
@@ -547,6 +594,7 @@ extension InspectorView {
     /// (so a neutral adjustment carries no effect / no render pass).
     private func upsertControl(_ effects: inout [Effect], control: EffectControl, value: Double) {
         guard let descriptor = EffectRegistry.descriptor(id: control.effectId) else { return }
+        let value = descriptor.params.first { $0.key == control.paramKey }?.snapped(value) ?? value
         if let i = effects.firstIndex(where: { $0.type == control.effectId }) {
             effects[i].params[control.paramKey] = EffectParam(value: value)
             let allDefault = descriptor.params.allSatisfy { spec in
@@ -589,11 +637,13 @@ extension InspectorView {
     }
 
     private func effectParamFormat(_ spec: EffectParamSpec) -> String {
-        (spec.range.upperBound - spec.range.lowerBound) <= 20 ? "%.2f" : "%.0f"
+        if let step = spec.step, step >= 1 { return "%.0f" }
+        return (spec.range.upperBound - spec.range.lowerBound) <= 20 ? "%.2f" : "%.0f"
     }
 
     private func effectParamSensitivity(_ spec: EffectParamSpec) -> Double {
-        max(0.01, (spec.range.upperBound - spec.range.lowerBound) / 200)
+        if let step = spec.step { return step / 10 }
+        return max(0.01, (spec.range.upperBound - spec.range.lowerBound) / 200)
     }
 
     /// Live edit (no undo entry) — mirrors applyClipProperty's refresh-only path.

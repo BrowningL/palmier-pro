@@ -1,6 +1,41 @@
 import AppKit
 
 extension TimelineView {
+    @objc func performAddBeatMarkers(_ sender: Any?) {
+        guard let info = (sender as? NSMenuItem)?.representedObject as? [String: Any],
+              let clipId = info["clipId"] as? String,
+              let everyNthBeat = info["everyNthBeat"] as? Int else { return }
+        let downbeatsOnly = info["downbeatsOnly"] as? Bool ?? false
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            editor.mediaPanelToast = MediaPanelToast(message: "Analysing the audio beat…", kind: .success)
+            do {
+                let report = try await editor.addBeatMarkers(
+                    clipId: clipId,
+                    everyNthBeat: everyNthBeat,
+                    downbeatsOnly: downbeatsOnly
+                )
+                let bpm = report.timelineTempoBPM > 0 ? " · \(Int(report.timelineTempoBPM.rounded())) BPM" : ""
+                editor.mediaPanelToast = MediaPanelToast(
+                    message: "Added \(report.markers.count) beat guides\(bpm).",
+                    kind: .success
+                )
+            } catch EditorViewModel.BeatMarkerError.superseded {
+                return
+            } catch {
+                editor.mediaPanelToast = MediaPanelToast(message: error.localizedDescription, kind: .warning)
+            }
+            needsDisplay = true
+        }
+    }
+
+    @objc func performRemoveBeatMarkers(_ sender: Any?) {
+        guard let clipId = (sender as? NSMenuItem)?.representedObject as? String else { return }
+        editor.removeGeneratedBeatMarkers(sourceClipId: clipId)
+        editor.mediaPanelToast = MediaPanelToast(message: "Removed beat guides.", kind: .success)
+        needsDisplay = true
+    }
+
     @objc func toggleMarkBeats(_ sender: Any?) {
         editor.markBeats.toggle()
     }

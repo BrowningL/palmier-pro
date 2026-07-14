@@ -259,6 +259,7 @@ final class TimelineInputController {
                 tracks: editor.timeline.tracks,
                 playheadFrame: editor.currentFrame,
                 includePlayhead: true,
+                markers: editor.timeline.activeMarkers,
                 beatFrames: editor.beatSnapFrames(for:)
             )
             let rangeEndFrame: Int
@@ -285,6 +286,7 @@ final class TimelineInputController {
                 playheadFrame: editor.currentFrame,
                 excludeClipIds: allDraggedIds,
                 includePlayhead: true,
+                markers: editor.timeline.activeMarkers,
                 beatFrames: editor.beatSnapFrames(for:)
             )
 
@@ -332,6 +334,7 @@ final class TimelineInputController {
                 playheadFrame: editor.currentFrame,
                 excludeClipIds: [drag.clipId],
                 includePlayhead: true,
+                markers: editor.timeline.activeMarkers,
                 beatFrames: editor.beatSnapFrames(for:),
                 includeExcludedClipBeats: true
             )
@@ -363,6 +366,7 @@ final class TimelineInputController {
                 playheadFrame: editor.currentFrame,
                 excludeClipIds: [drag.clipId],
                 includePlayhead: true,
+                markers: editor.timeline.activeMarkers,
                 beatFrames: editor.beatSnapFrames(for:),
                 includeExcludedClipBeats: true
             )
@@ -582,6 +586,7 @@ final class TimelineInputController {
                 tracks: editor.timeline.tracks,
                 playheadFrame: editor.currentFrame,
                 includePlayhead: true,
+                markers: editor.timeline.activeMarkers,
                 beatFrames: editor.beatSnapFrames(for:)
             )
             if let snap = SnapEngine.findSnap(

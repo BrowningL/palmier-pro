@@ -14,6 +14,7 @@ extension ToolExecutor {
         if let tracks = dict["tracks"] as? [[String: Any]] {
             dict["tracks"] = Self.compactTracks(tracks, editor: editor, window: window, captionDetail: captionDetail)
         }
+        Self.compactMarkers(in: &dict, timeline: editor.timeline, window: window)
         dict["totalFrames"] = editor.timeline.totalFrames
         dict["durationSeconds"] = Double(editor.timeline.totalFrames) / Double(max(editor.timeline.fps, 1))
         if let window {
@@ -125,6 +126,75 @@ extension ToolExecutor {
     private static let captionRowLimit = 200
     private static let captionRowFormat = ["clipId", "startFrame", "endFrame", "text"]
     private static let captionPreviewLimit = 60
+    private static let markerRowLimit = 500
+
+    /// Persistent generated grids can contain thousands of entries. Keep reads
+    /// compact, windowable, and free of internal stale-signature bookkeeping.
+    private static func compactMarkers(
+        in dict: inout [String: Any], timeline: Timeline, window: Range<Int>?
+    ) {
+        dict.removeValue(forKey: "markers")
+        let active = timeline.activeMarkers.sorted {
+            $0.frame == $1.frame ? $0.id < $1.id : $0.frame < $1.frame
+        }
+        guard !active.isEmpty else { return }
+        let visible = window.map { range in
+            active.filter { range.contains($0.frame) }
+        } ?? active
+
+        let manual = visible.filter { $0.kind == .manual }
+        if !manual.isEmpty {
+            dict["markers"] = manual.prefix(markerRowLimit).map { marker -> [String: Any] in
+                var row: [String: Any] = [
+                    "markerId": marker.id,
+                    "frame": marker.frame,
+                    "label": marker.label,
+                ]
+                if let color = marker.color { row["color"] = color }
+                return row
+            }
+        }
+
+        let allBeatGroups = Dictionary(grouping: active.filter { $0.kind == .beat }) {
+            $0.sourceClipId ?? "unknown"
+        }
+        let visibleBeatGroups = Dictionary(grouping: visible.filter { $0.kind == .beat }) {
+            $0.sourceClipId ?? "unknown"
+        }
+        let groups: [[String: Any]] = visibleBeatGroups.keys.sorted().compactMap { sourceClipId in
+            guard let rows = visibleBeatGroups[sourceClipId], !rows.isEmpty else { return nil }
+            let returned = Array(rows.prefix(markerRowLimit))
+            var group: [String: Any] = [
+                "sourceClipId": sourceClipId,
+                "beatCount": allBeatGroups[sourceClipId]?.count ?? rows.count,
+                "beatFormat": ["markerId", "frame", "beatIndex", "strength", "isDownbeat"],
+                "beats": returned.map { marker in
+                    [
+                        marker.id,
+                        marker.frame,
+                        marker.beatIndex ?? 0,
+                        marker.strength ?? 0,
+                        marker.isDownbeat,
+                    ] as [Any]
+                },
+            ]
+            if rows.count != allBeatGroups[sourceClipId]?.count {
+                group["windowBeatCount"] = rows.count
+            }
+            if returned.count < rows.count, let last = returned.last {
+                group["returnedBeatCount"] = returned.count
+                group["nextStartFrame"] = last.frame + 1
+                group["outputNote"] = "Continue get_timeline with startFrame=nextStartFrame; beat rows are capped at \(markerRowLimit)."
+            }
+            return group
+        }
+        if !groups.isEmpty { dict["beatMarkerGroups"] = groups }
+
+        let returnedCount = min(manual.count, markerRowLimit) + groups.reduce(0) {
+            $0 + (($1["beats"] as? [Any])?.count ?? 0)
+        }
+        if returnedCount < active.count { dict["totalMarkers"] = active.count }
+    }
 
     private static let trackDefaults: [String: Any] = ["muted": false, "hidden": false, "syncLocked": true]
 

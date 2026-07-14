@@ -25,6 +25,67 @@ struct ProjectRoundTripTests {
         #expect(try roundTrip(timeline) == timeline)
     }
 
+    @Test func timelineMarkersSurviveRoundTrip() throws {
+        var timeline = Fixtures.timeline(tracks: [
+            Fixtures.audioTrack(clips: [Fixtures.clip(id: "music", mediaType: .audio, start: 20, duration: 120)]),
+        ])
+        let signature = timeline.tracks[0].clips[0].beatMarkerTimingSignature(fps: timeline.fps)
+        timeline.markers = [
+            TimelineMarker(id: "manual", frame: 12, label: "Intro", color: "#FFAA00"),
+            TimelineMarker(
+                id: "beat", frame: 50, kind: .beat, sourceClipId: "music", sourceSeconds: 1.25,
+                beatIndex: 5, strength: 0.8, isDownbeat: true, sourceTimingSignature: signature
+            ),
+        ]
+
+        let decoded = try roundTrip(timeline)
+        #expect(decoded.markers == timeline.markers)
+        #expect(decoded.activeMarkers.count == 2)
+        #expect(decoded.markers[1].isDownbeat)
+    }
+
+    @Test func legacyTimelineWithoutMarkersDecodesEmptyMarkerList() throws {
+        let json = """
+        {"id":"legacy","name":"Legacy","fps":30,"width":1920,"height":1080,"tracks":[]}
+        """
+        let timeline = try JSONDecoder().decode(Timeline.self, from: Data(json.utf8))
+        #expect(timeline.markers.isEmpty)
+    }
+
+    @Test func malformedTracksStillFailProjectDecode() {
+        let json = """
+        {"id":"broken","name":"Broken","fps":30,"width":1920,"height":1080,"tracks":"not-an-array"}
+        """
+        #expect(throws: (any Error).self) {
+            _ = try JSONDecoder().decode(Timeline.self, from: Data(json.utf8))
+        }
+    }
+
+    @Test func legacyMarkerDefaultsRemainBackwardCompatible() throws {
+        let marker = try JSONDecoder().decode(
+            TimelineMarker.self,
+            from: Data(#"{"frame":42,"label":"Legacy"}"#.utf8)
+        )
+        #expect(marker.kind == .manual)
+        #expect(!marker.isDownbeat)
+        #expect(marker.sourceClipId == nil)
+        #expect(marker.sourceSeconds == nil)
+    }
+
+    @Test func customKeyEffectsSurviveTimelineRoundTrip() throws {
+        var clip = Fixtures.clip(id: "visual", start: 0, duration: 90)
+        clip.effects = [
+            Effect.make("key.luma", ["threshold": 0.82, "softness": 0.11]),
+            Effect.make("key.lumaDark", ["threshold": 0.14, "softness": 0.06]),
+            Effect.make("key.person", ["strength": 0.7, "mode": 2, "quality": 1]),
+        ]
+        let timeline = Fixtures.timeline(tracks: [Fixtures.videoTrack(clips: [clip])])
+        let decoded = try roundTrip(timeline)
+        let effects = try #require(decoded.tracks.first?.clips.first?.effects)
+        #expect(effects.map(\.type) == ["key.luma", "key.lumaDark", "key.person"])
+        #expect(effects[2].params["mode"]?.value == 2)
+    }
+
     @Test func clipPreservesFadeAndSpeedAndTrimAcrossRoundTrip() throws {
         var clip = Fixtures.clip(start: 0, duration: 60, trimStart: 10, trimEnd: 5, speed: 1.5, volume: 0.75)
         clip.fadeInFrames = 12

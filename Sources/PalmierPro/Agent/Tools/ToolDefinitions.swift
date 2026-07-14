@@ -45,6 +45,10 @@ enum ToolName: String, CaseIterable, Sendable {
     case removeWords = "remove_words"
     case removeSilence = "remove_silence"
     case detectBeats = "detect_beats"
+    case addBeatMarkers = "add_beat_markers"
+    case addMarkers = "add_markers"
+    case setMarkerProperties = "set_marker_properties"
+    case removeMarkers = "remove_markers"
 
     // Text & captions
     case addTexts = "add_texts"
@@ -98,6 +102,64 @@ enum ToolDefinitions {
                     "endFrame": ["type": "integer", "description": "Optional. Sample maxFrames evenly across [startFrame, endFrame) instead of one frame."],
                     "maxFrames": ["type": "integer", "description": "Frames to sample when endFrame is set (default 6, max 12)."],
                 ]
+            )
+        ),
+        AgentTool(
+            name: .addMarkers,
+            description: "Creates persistent, snapping timeline markers at exact project frames. Markers do not render or lengthen exports.",
+            inputSchema: objectSchema(
+                properties: [
+                    "entries": [
+                        "type": "array",
+                        "items": objectSchema(
+                            properties: [
+                                "frame": ["type": "integer", "description": "Exact project frame."],
+                                "label": ["type": "string", "description": "Optional display label."],
+                                "color": ["type": "string", "description": "Optional #RRGGBB or #RRGGBBAA color."],
+                            ],
+                            required: ["frame"]
+                        ),
+                    ],
+                ],
+                required: ["entries"]
+            )
+        ),
+        AgentTool(
+            name: .setMarkerProperties,
+            description: "Moves, renames, or recolors persistent timeline markers. Values apply to every markerId supplied.",
+            inputSchema: objectSchema(
+                properties: [
+                    "markerIds": ["type": "array", "items": ["type": "string"]],
+                    "frame": ["type": "integer"],
+                    "label": ["type": "string"],
+                    "color": ["type": "string"],
+                ],
+                required: ["markerIds"]
+            )
+        ),
+        AgentTool(
+            name: .removeMarkers,
+            description: "Deletes markers by markerIds, or all generated beat guides for sourceClipId. Clips and media are never removed.",
+            inputSchema: objectSchema(
+                properties: [
+                    "markerIds": ["type": "array", "items": ["type": "string"]],
+                    "sourceClipId": ["type": "string"],
+                ]
+            )
+        ),
+        AgentTool(
+            name: .addBeatMarkers,
+            description: "Runs Palmier's on-device Beat This detector and atomically creates persistent snapping guides at exact PROJECT frames. Re-running replaces only that clip's generated guides and preserves manual markers. Use downbeatsOnly for bar-start cuts; otherwise choose everyNthBeat for montage cadence.",
+            inputSchema: objectSchema(
+                properties: [
+                    "clipId": ["type": "string", "description": "Timeline audio clip, or linked video clip."],
+                    "everyNthBeat": ["type": "integer", "description": "1…16, default 1."],
+                    "beatOffset": ["type": "integer", "description": "Zero-based offset below everyNthBeat."],
+                    "downbeatsOnly": ["type": "boolean", "description": "Default false. Persist only detected downbeats."],
+                    "forceDetection": ["type": "boolean", "description": "Default false. Ignore the BeatStore/disk cache and redetect."],
+                    "color": ["type": "string", "description": "Optional #RRGGBB or #RRGGBBAA."],
+                ],
+                required: ["clipId"]
             )
         ),
         AgentTool(
@@ -1034,7 +1096,11 @@ enum ToolDefinitions {
             .filter { !$0.id.hasPrefix("color.") }
             .map { d in
                 let params = d.params.map { p in
-                    "\(p.key) (\(n(p.range.lowerBound))…\(n(p.range.upperBound))\(p.unit), default \(n(p.defaultValue)))"
+                    if let choices = p.choices {
+                        let values = choices.enumerated().map { "\($0.offset)=\($0.element)" }.joined(separator: ", ")
+                        return "\(p.key) (\(values); default \(n(p.defaultValue)))"
+                    }
+                    return "\(p.key) (\(n(p.range.lowerBound))…\(n(p.range.upperBound))\(p.unit), default \(n(p.defaultValue)))"
                 }.joined(separator: ", ")
                 return "• \(d.id) — \(d.displayName): \(params.isEmpty ? "no params" : params)"
             }

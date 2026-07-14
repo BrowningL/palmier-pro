@@ -22,6 +22,7 @@ struct Timeline: Codable, Sendable, Equatable, Identifiable {
     var settingsConfigured: Bool = false
     var folderId: String?
     var tracks: [Track] = []
+    var markers: [TimelineMarker] = []
 
     var totalFrames: Int {
         var maxFrame = 0
@@ -70,7 +71,7 @@ struct Timeline: Codable, Sendable, Equatable, Identifiable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, fps, width, height, settingsConfigured, folderId, tracks
+        case id, name, fps, width, height, settingsConfigured, folderId, tracks, markers
     }
 }
 
@@ -85,8 +86,110 @@ extension Timeline {
             height: try c.decode(Int.self, forKey: .height),
             settingsConfigured: (try? c.decode(Bool.self, forKey: .settingsConfigured)) ?? false,
             folderId: try? c.decode(String.self, forKey: .folderId),
-            tracks: try c.decode([Track].self, forKey: .tracks)
+            tracks: try c.decode([Track].self, forKey: .tracks),
+            markers: (try? c.decode([TimelineMarker].self, forKey: .markers)) ?? []
         )
+    }
+}
+
+struct TimelineMarker: Codable, Sendable, Equatable, Identifiable {
+    enum Kind: String, Codable, Sendable {
+        case manual
+        case beat
+    }
+
+    var id: String = UUID().uuidString
+    var frame: Int
+    var label: String = ""
+    var color: String?
+    var kind: Kind = .manual
+    var sourceClipId: String?
+    /// Exact position in the original media, retained so FPS migrations can remap
+    /// generated guides through the renderer's integer source-span invariant.
+    var sourceSeconds: Double?
+    var beatIndex: Int?
+    var strength: Double?
+    var isDownbeat: Bool = false
+    /// A generated grid is ignored after the source clip's timing changes.
+    var sourceTimingSignature: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case id, frame, label, color, kind, sourceClipId, sourceSeconds, beatIndex, strength, isDownbeat
+        case sourceTimingSignature
+    }
+
+    init(
+        id: String = UUID().uuidString,
+        frame: Int,
+        label: String = "",
+        color: String? = nil,
+        kind: Kind = .manual,
+        sourceClipId: String? = nil,
+        sourceSeconds: Double? = nil,
+        beatIndex: Int? = nil,
+        strength: Double? = nil,
+        isDownbeat: Bool = false,
+        sourceTimingSignature: String? = nil
+    ) {
+        self.id = id
+        self.frame = frame
+        self.label = label
+        self.color = color
+        self.kind = kind
+        self.sourceClipId = sourceClipId
+        self.sourceSeconds = sourceSeconds
+        self.beatIndex = beatIndex
+        self.strength = strength
+        self.isDownbeat = isDownbeat
+        self.sourceTimingSignature = sourceTimingSignature
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            id: (try? c.decode(String.self, forKey: .id)) ?? UUID().uuidString,
+            frame: (try? c.decode(Int.self, forKey: .frame)) ?? 0,
+            label: (try? c.decode(String.self, forKey: .label)) ?? "",
+            color: try? c.decode(String.self, forKey: .color),
+            kind: (try? c.decode(Kind.self, forKey: .kind)) ?? .manual,
+            sourceClipId: try? c.decode(String.self, forKey: .sourceClipId),
+            sourceSeconds: try? c.decode(Double.self, forKey: .sourceSeconds),
+            beatIndex: try? c.decode(Int.self, forKey: .beatIndex),
+            strength: try? c.decode(Double.self, forKey: .strength),
+            isDownbeat: (try? c.decode(Bool.self, forKey: .isDownbeat)) ?? false,
+            sourceTimingSignature: try? c.decode(String.self, forKey: .sourceTimingSignature)
+        )
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(frame, forKey: .frame)
+        try c.encode(label, forKey: .label)
+        try c.encodeIfPresent(color, forKey: .color)
+        if kind != .manual { try c.encode(kind, forKey: .kind) }
+        try c.encodeIfPresent(sourceClipId, forKey: .sourceClipId)
+        try c.encodeIfPresent(sourceSeconds, forKey: .sourceSeconds)
+        try c.encodeIfPresent(beatIndex, forKey: .beatIndex)
+        try c.encodeIfPresent(strength, forKey: .strength)
+        if isDownbeat { try c.encode(isDownbeat, forKey: .isDownbeat) }
+        try c.encodeIfPresent(sourceTimingSignature, forKey: .sourceTimingSignature)
+    }
+}
+
+extension Timeline {
+    /// Manual markers and generated grids whose source timing still matches.
+    var activeMarkers: [TimelineMarker] {
+        var signatures: [String: String] = [:]
+        for clip in tracks.flatMap(\.clips) {
+            signatures[clip.id] = clip.beatMarkerTimingSignature(fps: fps)
+        }
+        return markers.filter { marker in
+            guard marker.kind == .beat,
+                  let sourceClipId = marker.sourceClipId,
+                  let signature = marker.sourceTimingSignature else { return true }
+            return signatures[sourceClipId] == signature
+        }
     }
 }
 
@@ -201,6 +304,16 @@ struct Clip: Codable, Sendable, Equatable, Identifiable {
 
     /// Source frames consumed by the visible portion
     var sourceFramesConsumed: Int { Int((Double(durationFrames) * speed).rounded()) }
+
+    /// Integer source span inserted by CompositionBuilder.
+    var renderedSourceFramesConsumed: Int {
+        speed == 1 ? durationFrames : max(1, Int(Double(durationFrames) * speed))
+    }
+
+    /// Playback rate after CompositionBuilder truncates the rendered source span.
+    var effectivePlaybackSpeed: Double {
+        Double(renderedSourceFramesConsumed) / Double(max(1, durationFrames))
+    }
 
     /// Total source frames the clip references, including both trims.
     var sourceDurationFrames: Int { sourceFramesConsumed + trimStartFrame + trimEndFrame }
@@ -319,12 +432,17 @@ struct Clip: Codable, Sendable, Equatable, Identifiable {
 
     /// Source-seconds → project-timeline-frame through this clip's placement, trim, and speed.
     func timelineFrame(sourceSeconds t: Double, fps: Int) -> Int? {
+        guard t.isFinite, fps > 0 else { return nil }
         let sourceFrame = t * Double(fps)
         let offsetFromTrim = sourceFrame - Double(trimStartFrame)
         guard offsetFromTrim >= 0 else { return nil }
-        let frame = Int((Double(startFrame) + offsetFromTrim / max(speed, 0.0001)).rounded())
+        let frame = Int((Double(startFrame) + offsetFromTrim / max(effectivePlaybackSpeed, 0.0001)).rounded())
         guard frame >= startFrame && frame < endFrame else { return nil }
         return frame
+    }
+
+    func beatMarkerTimingSignature(fps: Int) -> String {
+        "\(mediaRef)|\(startFrame)|\(durationFrames)|\(trimStartFrame)|\(renderedSourceFramesConsumed)|\(fps)"
     }
 }
 

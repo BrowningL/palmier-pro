@@ -23,6 +23,13 @@ struct ClipMathTests {
         #expect(clip.sourceFramesConsumed == 25)
     }
 
+    @Test func renderedSourceSpanMatchesCompositionBuilderTruncation() {
+        let clip = Fixtures.clip(start: 0, duration: 33, speed: 0.75)
+        #expect(clip.sourceFramesConsumed == 25)
+        #expect(clip.renderedSourceFramesConsumed == 24)
+        #expect(abs(clip.effectivePlaybackSpeed - 24.0 / 33.0) < 1e-12)
+    }
+
     @Test func sourceDurationIncludesBothTrims() {
         // consumed (100) + trimStart (10) + trimEnd (5) = 115.
         let clip = Fixtures.clip(start: 0, duration: 100, trimStart: 10, trimEnd: 5)
@@ -54,6 +61,13 @@ struct ClipMathTests {
         // start=0, speed=2.0, fps=30. sourceSeconds=2.0 → 60 source frames → 60/2 = 30 timeline frames.
         let clip = Fixtures.clip(start: 0, duration: 100, speed: 2.0)
         #expect(clip.timelineFrame(sourceSeconds: 2.0, fps: 30) == 30)
+    }
+
+    @Test func timelineFrameUsesExactFractionalRenderedSpan() {
+        let clip = Fixtures.clip(start: 100, duration: 33, speed: 0.75)
+        // CompositionBuilder inserts 24 source frames, then scales them across 33 timeline frames.
+        // Source frame 12 therefore lands 16.5 frames into the clip, rounded to project frame 117.
+        #expect(clip.timelineFrame(sourceSeconds: 12.0 / 30.0, fps: 30) == 117)
     }
 
     @Test func timelineFrameBeforeTrimReturnsNil() {
@@ -293,5 +307,47 @@ struct TimelineInvariantTests {
     @Test func emptyTimelineHasZeroTotalFrames() {
         let timeline = Fixtures.timeline(tracks: [])
         #expect(timeline.totalFrames == 0)
+    }
+
+    @Test func staleGeneratedMarkersAreInactiveButManualMarkersRemain() {
+        let clip = Fixtures.clip(id: "music", mediaType: .audio, start: 0, duration: 60)
+        var timeline = Fixtures.timeline(tracks: [Fixtures.audioTrack(clips: [clip])])
+        timeline.markers = [
+            TimelineMarker(frame: 10, label: "Manual"),
+            TimelineMarker(
+                frame: 20, kind: .beat, sourceClipId: "music", beatIndex: 1,
+                sourceTimingSignature: clip.beatMarkerTimingSignature(fps: timeline.fps)
+            ),
+        ]
+        #expect(timeline.activeMarkers.count == 2)
+        timeline.tracks[0].clips[0].trimStartFrame = 3
+        #expect(timeline.activeMarkers.map(\.label) == ["Manual"])
+    }
+
+    @Test func fpsRescaleRemapsExactBeatSourceTimeThroughFractionalRenderedSpan() {
+        let clip = Fixtures.clip(
+            id: "music", mediaType: .audio, start: 30, duration: 3, trimStart: 6, speed: 1.2
+        )
+        var timeline = Fixtures.timeline(fps: 30, tracks: [Fixtures.audioTrack(clips: [clip])])
+        timeline.markers = [
+            TimelineMarker(
+                frame: 32, kind: .beat, sourceClipId: "music", sourceSeconds: 8.0 / 30.0,
+                beatIndex: 1, sourceTimingSignature: clip.beatMarkerTimingSignature(fps: 30)
+            ),
+            TimelineMarker(
+                frame: 31, kind: .beat, sourceClipId: "music", beatIndex: 2,
+                sourceTimingSignature: clip.beatMarkerTimingSignature(fps: 30)
+            ),
+        ]
+        timeline.rescaleFrames(by: 2, newFPS: 60)
+        timeline.fps = 60
+        // A naive 2x scale is frame 64. CompositionBuilder's new integer span is
+        // 7 source frames over 6 timeline frames, so the exact remap is frame 63.
+        #expect(timeline.markers.first { $0.beatIndex == 1 }?.frame == 63)
+        #expect(timeline.markers.first { $0.beatIndex == 2 }?.frame == 62) // legacy marker fallback
+        #expect(timeline.activeMarkers.count == 2)
+        #expect(timeline.markers.allSatisfy {
+            $0.sourceTimingSignature == timeline.tracks[0].clips[0].beatMarkerTimingSignature(fps: 60)
+        })
     }
 }

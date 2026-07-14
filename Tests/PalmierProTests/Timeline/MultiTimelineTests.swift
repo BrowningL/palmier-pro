@@ -97,6 +97,31 @@ struct MultiTimelineTests {
         #expect(dup.tracks[1].clips[0].linkGroupId == g)
     }
 
+    @Test func duplicateRemapsPersistentMarkerIdsAndBeatSources() throws {
+        let e = EditorViewModel()
+        let clip = Fixtures.clip(id: "audio-source", mediaType: .audio, start: 30, duration: 90)
+        e.timeline.tracks = [Fixtures.audioTrack(clips: [clip])]
+        e.timeline.markers = [
+            TimelineMarker(id: "manual-marker", frame: 42, label: "Hook"),
+            TimelineMarker(
+                id: "beat-marker", frame: 60, kind: .beat,
+                sourceClipId: clip.id, beatIndex: 2,
+                sourceTimingSignature: clip.beatMarkerTimingSignature(fps: e.timeline.fps)
+            ),
+        ]
+        let sourceId = e.activeTimelineId
+
+        let duplicateId = try #require(e.duplicateTimeline(sourceId, activate: false))
+        let duplicate = try #require(e.timeline(for: duplicateId))
+        let duplicateClip = try #require(duplicate.tracks.first?.clips.first)
+        let duplicateBeat = try #require(duplicate.markers.first { $0.kind == .beat })
+
+        #expect(Set(duplicate.markers.map(\.id)).isDisjoint(with: Set(["manual-marker", "beat-marker"])))
+        #expect(duplicateBeat.sourceClipId == duplicateClip.id)
+        #expect(duplicate.activeMarkers.count == 2)
+        #expect(e.timeline(for: sourceId)?.markers.first { $0.kind == .beat }?.sourceClipId == clip.id)
+    }
+
     @Test func deleteKeepsAtLeastOneAndReactivates() {
         let e = EditorViewModel()
         let firstId = e.activeTimelineId
@@ -172,6 +197,40 @@ struct MultiTimelineTests {
         let rest = e.timeline(for: secondId)!
         #expect(rest.tracks.count == 1)
         #expect(rest.tracks[0].clips.map(\.mediaRef) == ["m2"])
+    }
+
+    @Test func relinkingMediaRetiresGeneratedGuidesAcrossEveryTimeline() throws {
+        let replacement = FileManager.default.temporaryDirectory
+            .appendingPathComponent("replacement-\(UUID().uuidString).wav")
+        try Data([0]).write(to: replacement)
+        defer { try? FileManager.default.removeItem(at: replacement) }
+
+        let e = EditorViewModel()
+        let firstClip = Fixtures.clip(id: "music-a", mediaRef: "song", mediaType: .audio, start: 0, duration: 60)
+        e.timeline.tracks = [Fixtures.audioTrack(clips: [firstClip])]
+        e.timeline.markers = [
+            TimelineMarker(id: "beat-a", frame: 10, kind: .beat, sourceClipId: firstClip.id, beatIndex: 1),
+            TimelineMarker(id: "manual-a", frame: 20, label: "Keep"),
+        ]
+        let secondId = e.createTimeline(activate: false)
+        let secondClip = Fixtures.clip(id: "music-b", mediaRef: "song", mediaType: .audio, start: 0, duration: 60)
+        let secondIndex = try #require(e.timelines.firstIndex { $0.id == secondId })
+        e.timelines[secondIndex].tracks = [Fixtures.audioTrack(clips: [secondClip])]
+        e.timelines[secondIndex].markers = [
+            TimelineMarker(id: "beat-b", frame: 10, kind: .beat, sourceClipId: secondClip.id, beatIndex: 1),
+        ]
+        let asset = MediaAsset(
+            id: "song", url: URL(fileURLWithPath: "/tmp/original.wav"),
+            type: .audio, name: "Song", duration: 2
+        )
+        e.mediaAssets.append(asset)
+        e.beatMarkerRequestIds = [firstClip.id: UUID(), secondClip.id: UUID()]
+
+        e.relinkAsset(id: asset.id, to: replacement)
+
+        #expect(e.timeline.markers.map(\.id) == ["manual-a"])
+        #expect(e.timeline(for: secondId)?.markers.isEmpty == true)
+        #expect(e.beatMarkerRequestIds.isEmpty)
     }
 
     @Test func settingsUndoLandsOnOwningTimeline() {

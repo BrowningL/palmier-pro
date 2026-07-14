@@ -57,7 +57,7 @@ extension ToolExecutor {
                     if let enabled = e.enabled { effect.enabled = enabled }
                     if let params = e.params {
                         for spec in d.params where params[spec.key] != nil {
-                            let v = min(spec.range.upperBound, max(spec.range.lowerBound, params[spec.key]!))
+                            let v = spec.snapped(min(spec.range.upperBound, max(spec.range.lowerBound, params[spec.key]!)))
                             effect.params[spec.key] = EffectParam(value: (v * 1000).rounded() / 1000)
                         }
                     }

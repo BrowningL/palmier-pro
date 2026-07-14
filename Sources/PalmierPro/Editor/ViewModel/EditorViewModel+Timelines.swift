@@ -262,14 +262,29 @@ extension EditorViewModel {
 }
 
 extension Timeline {
-    /// Fresh track/clip/group ids for a duplicated timeline so ids stay unique project-wide.
+    /// Fresh track/clip/group/marker ids for a duplicated timeline so ids stay unique project-wide.
     mutating func regenerateIds() {
         var groups: [String: String] = [:]
+        var clipIds: [String: String] = [:]
         for ti in tracks.indices {
             tracks[ti].id = UUID().uuidString
             for ci in tracks[ti].clips.indices {
+                let previousId = tracks[ti].clips[ci].id
                 tracks[ti].clips[ci].freshenIds(groups: &groups)
+                clipIds[previousId] = tracks[ti].clips[ci].id
             }
+        }
+        for i in markers.indices {
+            markers[i].id = UUID().uuidString
+            if let sourceClipId = markers[i].sourceClipId {
+                markers[i].sourceClipId = clipIds[sourceClipId]
+            }
+        }
+        let signatures = Dictionary(uniqueKeysWithValues: tracks.flatMap(\.clips).map {
+            ($0.id, $0.beatMarkerTimingSignature(fps: fps))
+        })
+        for i in markers.indices where markers[i].kind == .beat {
+            markers[i].sourceTimingSignature = markers[i].sourceClipId.flatMap { signatures[$0] }
         }
     }
 }

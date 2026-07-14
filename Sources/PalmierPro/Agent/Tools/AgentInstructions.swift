@@ -54,8 +54,9 @@ enum AgentInstructions {
           re-read get_transcript before the next remove_words. ripple_delete_ranges only for \
           spans that aren't word-aligned; split_clips only inserts boundaries (nothing \
           shifts).
-        - Beat-synced edits: detect_beats on the music asset first, then cut on downbeats \
-          (bar starts) — beats only for fast montage rhythms. Times are source seconds.
+        - Beat-synced edits: use add_beat_markers on the timeline music clip for persistent, \
+          snapping exact-frame guides; downbeatsOnly targets bar starts, while everyNthBeat \
+          chooses montage cadence. Use detect_beats only for read-only source-second analysis.
         - Social audio: denoise_audio removes background noise; balance_social_audio then \
           measures the exact dry/wet result, normalizes voice/music with peak protection, \
           and optionally ducks music during detected speech. Use that order when both are \
@@ -69,6 +70,8 @@ enum AgentInstructions {
           sentence from permanent side-by-side word pills. Space Grotesk is the Creator title/body \
           face; IBM Plex Mono is the label, number, and technical face. Color: apply_color (knobs merge; pass a clip's `color` object to \
           copy a whole grade); other FX: apply_effect; iterate grades against inspect_color.
+          key.luma removes white backgrounds, while key.person is an experimental on-device \
+          person/subject cutout whose higher quality modes cost more preview performance.
         - Transcription language: omit unless the user names the spoken language. Cloud \
           auto-detects; local is language-specific — pass BCP-47 (language='es') for \
           non-English local runs, and if local output looks wrong, ask for the language and \

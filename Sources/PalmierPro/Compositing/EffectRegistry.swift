@@ -7,6 +7,13 @@ struct EffectParamSpec: Sendable {
     let range: ClosedRange<Double>
     let defaultValue: Double
     let unit: String
+    var step: Double? = nil
+    var choices: [String]? = nil
+
+    func snapped(_ value: Double) -> Double {
+        guard let step, step > 0 else { return value }
+        return min(range.upperBound, max(range.lowerBound, (value / step).rounded() * step))
+    }
 }
 
 /// Numeric/string param values resolved for one frame
@@ -14,6 +21,7 @@ struct ResolvedEffectParams: Sendable {
     let values: [String: Double]
     let strings: [String: String]
     var frame: Int = 0   // timeline frame, for effects that animate (e.g. grain)
+    var cacheKey: String = ""
 
     func value(_ key: String) -> Double { values[key] ?? 0 }
     func string(_ key: String) -> String? { strings[key] }
@@ -53,15 +61,18 @@ struct EffectDescriptor: Identifiable, Sendable {
         for spec in params {
             let raw = effect.params[spec.key]?.resolved(at: offset, default: spec.defaultValue)
                 ?? spec.defaultValue
-            values[spec.key] = min(spec.range.upperBound, max(spec.range.lowerBound, raw))
+            values[spec.key] = spec.snapped(min(spec.range.upperBound, max(spec.range.lowerBound, raw)))
         }
         let strings = effect.params.compactMapValues(\.string)
         return ResolvedEffectParams(values: values, strings: strings, frame: offset)
     }
 
     /// Full application incl. optional linear-light wrapping.
-    func render(_ image: CIImage, effect: Effect, atOffset offset: Int) -> CIImage {
-        let params = resolve(effect, atOffset: offset)
+    func render(_ image: CIImage, effect: Effect, atOffset offset: Int, cacheSalt: String = "") -> CIImage {
+        var params = resolve(effect, atOffset: offset)
+        // Effect ids distinguish two segmentation effects on the same source frame;
+        // the caller salt distinguishes clip/media identities.
+        params.cacheKey = "\(cacheSalt):\(effect.id):\(offset)"
         let extent = image.extent
         var working = image
         if linearizes {
@@ -77,6 +88,7 @@ struct EffectDescriptor: Identifiable, Sendable {
 
 enum EffectRegistry {
 
+    /// Effects published in the inspector and agent catalog.
     static let all: [EffectDescriptor] = color + wheels + hueCurves + lut + curves + detail + blur + stylize + key
 
     private static let color: [EffectDescriptor] = [
@@ -326,6 +338,43 @@ enum EffectRegistry {
 
     private static let key: [EffectDescriptor] = [
         EffectDescriptor(
+            id: "key.person", displayName: "Remove Background (Experimental)", category: "Key",
+            params: [
+                EffectParamSpec(key: "strength", label: "Strength", range: 0...1, defaultValue: 0, unit: ""),
+                EffectParamSpec(
+                    key: "mode", label: "Mode", range: 0...2, defaultValue: 1, unit: "", step: 1,
+                    choices: ["Person", "Main Subject", "Person + Subject"]
+                ),
+                EffectParamSpec(key: "feather", label: "Feather", range: 0...1, defaultValue: 0.1, unit: ""),
+                EffectParamSpec(key: "shift", label: "Edge Shift", range: -1...1, defaultValue: 0, unit: ""),
+                EffectParamSpec(
+                    key: "quality", label: "Quality", range: 0...2, defaultValue: 1, unit: "", step: 1,
+                    choices: ["Fast", "Balanced", "Accurate"]
+                ),
+            ],
+            apply: { image, p, _ in
+                PersonKeyKernel.apply(
+                    image,
+                    strength: p.value("strength"),
+                    feather: p.value("feather"),
+                    shift: p.value("shift"),
+                    mode: p.value("mode"),
+                    quality: p.value("quality"),
+                    cacheKey: p.cacheKey
+                )
+            }
+        ),
+        EffectDescriptor(
+            id: "key.luma", displayName: "Luma Key", category: "Key",
+            params: [
+                EffectParamSpec(key: "threshold", label: "Threshold", range: 0...1, defaultValue: 1, unit: ""),
+                EffectParamSpec(key: "softness", label: "Softness", range: 0...1, defaultValue: 0.08, unit: ""),
+            ],
+            apply: { image, p, _ in
+                LumaKeyKernel.apply(image, threshold: p.value("threshold"), softness: p.value("softness"))
+            }
+        ),
+        EffectDescriptor(
             id: "key.chroma", displayName: "Chroma Key", category: "Key",
             params: [
                 EffectParamSpec(key: "keyHue", label: "Key Hue", range: 0...1, defaultValue: 0.333, unit: ""),
@@ -340,8 +389,23 @@ enum EffectRegistry {
         ),
     ]
 
+    /// Kept renderable for projects created by the fork, without publishing the
+    /// unfinished control in effect menus or the agent-facing catalog.
+    private static let compatibilityOnly: [EffectDescriptor] = [
+        EffectDescriptor(
+            id: "key.lumaDark", displayName: "Black Luma Key", category: "Key",
+            params: [
+                EffectParamSpec(key: "threshold", label: "Threshold", range: 0...1, defaultValue: 0, unit: ""),
+                EffectParamSpec(key: "softness", label: "Softness", range: 0...1, defaultValue: 0.08, unit: ""),
+            ],
+            apply: { image, p, _ in
+                LumaKeyKernel.applyDark(image, threshold: p.value("threshold"), softness: p.value("softness"))
+            }
+        ),
+    ]
+
     static let byId: [String: EffectDescriptor] = Dictionary(
-        uniqueKeysWithValues: all.map { ($0.id, $0) }
+        uniqueKeysWithValues: (all + compatibilityOnly).map { ($0.id, $0) }
     )
 
     static func descriptor(id: String) -> EffectDescriptor? { byId[id] }
@@ -350,7 +414,8 @@ enum EffectRegistry {
     static let canonicalOrder: [String] = [
         "color.exposure", "color.contrast", "color.highlightsShadows", "color.blacksWhites",
         "color.temperature", "color.vibrance", "color.saturation", "color.wheels", "color.curves",
-        "color.hueCurves", "color.lut", "detail.clarity", "key.chroma", "blur.gaussian", "blur.sharpen",
+        "color.hueCurves", "color.lut", "detail.clarity", "key.person", "key.luma", "key.lumaDark",
+        "key.chroma", "blur.gaussian", "blur.sharpen",
         "blur.noiseReduction", "blur.motion", "stylize.grain", "stylize.vignette", "stylize.glow",
     ]
 

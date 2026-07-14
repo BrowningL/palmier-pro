@@ -27,7 +27,7 @@ extension EditorViewModel {
             currentFrame = Int((Double(currentFrame) * scale).rounded())
             sourcePlayheadFrame = Int((Double(sourcePlayheadFrame) * scale).rounded())
             for i in timelines.indices {
-                timelines[i].rescaleFrames(by: scale)
+                timelines[i].rescaleFrames(by: scale, newFPS: fps)
             }
             liveViewStates = liveViewStates.mapValues { vs in
                 var vs = vs
@@ -149,7 +149,10 @@ extension EditorViewModel {
 }
 
 extension Timeline {
-    mutating func rescaleFrames(by scale: Double) {
+    mutating func rescaleFrames(by scale: Double, newFPS: Int? = nil) {
+        for i in markers.indices {
+            markers[i].frame = max(0, Int((Double(markers[i].frame) * scale).rounded()))
+        }
         for ti in tracks.indices {
             let clipIndices = tracks[ti].clips.indices.sorted {
                 tracks[ti].clips[$0].startFrame < tracks[ti].clips[$1].startFrame
@@ -172,5 +175,28 @@ extension Timeline {
                 previousEnd = clip.endFrame
             }
         }
+        let signatureFPS = newFPS ?? fps
+        var signatureByClipId: [String: String] = [:]
+        var clipById: [String: Clip] = [:]
+        for clip in tracks.flatMap(\.clips) {
+            signatureByClipId[clip.id] = clip.beatMarkerTimingSignature(fps: signatureFPS)
+            clipById[clip.id] = clip
+        }
+        for i in markers.indices where markers[i].kind == .beat {
+            guard let sourceClipId = markers[i].sourceClipId,
+                  let signature = signatureByClipId[sourceClipId],
+                  let clip = clipById[sourceClipId] else { continue }
+            if let sourceSeconds = markers[i].sourceSeconds {
+                guard sourceSeconds.isFinite,
+                      let exactFrame = clip.timelineFrame(sourceSeconds: sourceSeconds, fps: signatureFPS) else {
+                    // Leave the old signature in place so a guide that no longer
+                    // maps inside its clip becomes inactive rather than misleading.
+                    continue
+                }
+                markers[i].frame = exactFrame
+            }
+            markers[i].sourceTimingSignature = signature
+        }
+        markers.sort { $0.frame == $1.frame ? $0.id < $1.id : $0.frame < $1.frame }
     }
 }

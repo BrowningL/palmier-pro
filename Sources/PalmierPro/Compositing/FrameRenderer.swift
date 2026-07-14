@@ -247,9 +247,11 @@ enum FrameRenderer {
         // Effects apply in source-pixel space: after crop, before placement.
         if let effects = clip.effects, !effects.isEmpty {
             let offset = frame - clip.startFrame
+            var cacheSalt = "\(clip.id):\(clip.mediaRef):\(clip.trimStartFrame):\(clip.renderedSourceFramesConsumed)"
             for effect in effects where effect.enabled {
                 guard let descriptor = EffectRegistry.descriptor(id: effect.type) else { continue }
-                image = descriptor.render(image, effect: effect, atOffset: offset)
+                image = descriptor.render(image, effect: effect, atOffset: offset, cacheSalt: cacheSalt)
+                cacheSalt = appendingEffectIdentity(effect, at: offset, to: cacheSalt)
             }
         }
 
@@ -287,9 +289,11 @@ enum FrameRenderer {
 
         if let effects = clip.effects, !effects.isEmpty {
             let offset = frame - clip.startFrame
+            var cacheSalt = "\(clip.id):text:\(clip.textContent ?? "")"
             for effect in effects where effect.enabled {
                 guard let descriptor = EffectRegistry.descriptor(id: effect.type) else { continue }
-                image = descriptor.render(image, effect: effect, atOffset: offset)
+                image = descriptor.render(image, effect: effect, atOffset: offset, cacheSalt: cacheSalt)
+                cacheSalt = appendingEffectIdentity(effect, at: offset, to: cacheSalt)
             }
         }
         image = image.premultiplyingAlpha()
@@ -300,6 +304,22 @@ enum FrameRenderer {
             ])
         }
         return image
+    }
+
+    /// Person mattes may depend on effects earlier in the stack. Fold their
+    /// exact resolved values into the cache identity so tuning a grade cannot
+    /// reuse a segmentation matte from visually different input pixels.
+    private static func appendingEffectIdentity(_ effect: Effect, at offset: Int, to base: String) -> String {
+        var parts = [base, effect.id, effect.type]
+        for key in effect.params.keys.sorted() {
+            guard let param = effect.params[key] else { continue }
+            parts.append(key)
+            if param.value != nil || param.track != nil {
+                parts.append(String(param.resolved(at: offset, default: param.value ?? 0).bitPattern))
+            }
+            if let string = param.string { parts.append(string) }
+        }
+        return parts.joined(separator: "|")
     }
 
     private static func flipY(_ height: CGFloat) -> CGAffineTransform {

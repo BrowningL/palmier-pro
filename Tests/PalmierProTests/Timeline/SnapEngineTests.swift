@@ -45,6 +45,28 @@ struct SnapEngineTests {
         #expect(frames == [100, 180])
     }
 
+    @Test func collectTargetsIncludesPersistentMarkers() {
+        let markers = [
+            TimelineMarker(frame: 24, label: "Manual"),
+            TimelineMarker(frame: 48, kind: .beat, sourceClipId: "music", beatIndex: 1),
+        ]
+        let targets = SnapEngine.collectTargets(tracks: [], markers: markers)
+        #expect(targets.map(\.frame) == [24, 48])
+        #expect(targets.allSatisfy { $0.kind == .marker })
+    }
+
+    @Test func generatedMarkerFromDraggedClipIsExcludedUnlessRequested() {
+        let marker = TimelineMarker(frame: 48, kind: .beat, sourceClipId: "music", beatIndex: 1)
+        let excluded = SnapEngine.collectTargets(
+            tracks: [], excludeClipIds: ["music"], markers: [marker]
+        )
+        let included = SnapEngine.collectTargets(
+            tracks: [], excludeClipIds: ["music"], markers: [marker], includeExcludedClipBeats: true
+        )
+        #expect(excluded.isEmpty)
+        #expect(included.map(\.frame) == [48])
+    }
+
     // MARK: - findSnap (basic threshold)
 
     @Test func findSnapReturnsNilWhenNoTargets() {

@@ -302,6 +302,29 @@ enum AppTheme {
         static let updateOverlayWidth: CGFloat = 640
     }
 
+    enum TimelineMarker {
+        static let prefetchLeading: CGFloat = 48
+        static let prefetchTrailing: CGFloat = 160
+        static let beatOverviewSpacing: CGFloat = 3
+        static let hitSlopMin: CGFloat = 6
+        static let hitSlopMax: CGFloat = 14
+        static let hitSlopFrameFactor: CGFloat = 3
+        static let beatDiamondWidth: CGFloat = 6
+        static let markerDiamondWidth: CGFloat = 9
+        static let diamondHalfHeight: CGFloat = 7
+        static let beatTopInset: CGFloat = 7
+        static let markerTopInset: CGFloat = 4
+        static let labelLeading: CGFloat = 7
+        static let labelWidth: CGFloat = 136
+        static let labelHeight: CGFloat = 14
+        static let labelFontSize: CGFloat = FontSize.xs
+        static let labelFontWeight: NSFont.Weight = .medium
+        static let labelMinPixelsPerFrame: Double = 0.75
+        static let manualGuideOpacity: CGFloat = 0.68
+        static let beatGuideOpacity: CGFloat = 0.26
+        static let downbeatGuideOpacity: CGFloat = 0.48
+    }
+
     enum Window {
         static let homeDefault = NSSize(width: 1200, height: 880)
         static let homeMin = NSSize(width: 760, height: 480)
