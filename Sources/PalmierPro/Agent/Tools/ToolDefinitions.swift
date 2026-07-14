@@ -56,6 +56,7 @@ enum ToolName: String, CaseIterable, Sendable {
     case applyEffect = "apply_effect"
     case inspectColor = "inspect_color"
     case denoiseAudio = "denoise_audio"
+    case balanceSocialAudio = "balance_social_audio"
 
     // Generation
     case listModels = "list_models"
@@ -903,6 +904,28 @@ enum ToolDefinitions {
                     "enabled": ["type": "boolean", "description": "Default true. false removes the denoise effect from the clips."],
                 ],
                 required: ["clipIds"]
+            )
+        ),
+        AgentTool(
+            name: .balanceSocialAudio,
+            description: "Measure and non-destructively balance the active timeline for phone/social playback. action='balance' normalizes voice and music with peak protection; balanced and clearVoice also duck music only during detected speech, while fixedLevel keeps music at a steady lower level. Use roles to correct automatic voice/music classification. If the user also wants background-noise removal, call denoise_audio first: this tool measures the exact resulting dry/wet signal. action='clear' removes the automatic normalization and ducking recipe from clipIds without changing authored volume, fades, or keyframes. Undoable.",
+            inputSchema: objectSchema(
+                properties: [
+                    "action": ["type": "string", "enum": ["balance", "clear"], "description": "Default balance. clear removes Social Audio Mix from clipIds."],
+                    "preset": ["type": "string", "enum": ["balanced", "clearVoice", "fixedLevel"], "description": "Balance preset. balanced is the default; clearVoice ducks music more; fixedLevel never ducks."],
+                    "roles": [
+                        "type": "array",
+                        "description": "Optional role overrides applied atomically with the balance result.",
+                        "items": objectSchema(
+                            properties: [
+                                "clipId": ["type": "string", "description": "Audio clip id from get_timeline."],
+                                "role": ["type": "string", "enum": ["voice", "music"]],
+                            ],
+                            required: ["clipId", "role"]
+                        ),
+                    ],
+                    "clipIds": ["type": "array", "items": ["type": "string"], "description": "Required only for action='clear'."],
+                ]
             )
         ),
         AgentTool(

@@ -56,6 +56,11 @@ enum AgentInstructions {
           shifts).
         - Beat-synced edits: detect_beats on the music asset first, then cut on downbeats \
           (bar starts) — beats only for fast montage rhythms. Times are source seconds.
+        - Social audio: denoise_audio removes background noise; balance_social_audio then \
+          measures the exact dry/wet result, normalizes voice/music with peak protection, \
+          and optionally ducks music during detected speech. Use that order when both are \
+          requested. fixedLevel keeps a steady music bed without ducking. Authored volume, \
+          fades, and keyframes remain independent.
         - Text: add_texts for authored overlays; add_captions transcribes the timeline's \
           spoken audio (no targeting) — restyle with update_text and the returned \
           captionGroupId. Use textPreset='instagramLight' or 'instagramDark' for the complete \

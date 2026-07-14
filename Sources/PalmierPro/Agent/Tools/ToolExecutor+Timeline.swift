@@ -233,6 +233,9 @@ extension ToolExecutor {
             let cleaned = compactEffects(fx)
             if !cleaned.isEmpty { out["effects"] = cleaned }
         }
+        if let socialAudio = stripped["socialAudio"] as? [String: Any] {
+            out["socialAudio"] = compactSocialAudio(socialAudio)
+        }
         return out
     }
 
@@ -253,6 +256,20 @@ extension ToolExecutor {
             if let enabled = e["enabled"] as? Bool, !enabled { out["enabled"] = false }
             return out
         }
+    }
+
+    private static func compactSocialAudio(_ raw: [String: Any]) -> [String: Any] {
+        var out: [String: Any] = [:]
+        for key in [
+            "role", "preset", "measuredLoudnessLUFS", "measuredPeakDbFS",
+            "normalizationGainDb", "duckingAmountDb",
+        ] {
+            if let value = raw[key] { out[key] = value }
+        }
+        if let ranges = raw["speechActivity"] as? [Any], !ranges.isEmpty {
+            out["speechRangeCount"] = ranges.count
+        }
+        return out
     }
 
     // MARK: - Track and clip compaction
@@ -311,6 +328,9 @@ extension ToolExecutor {
         if let fx = out["effects"] as? [[String: Any]] {
             let cleaned = compactEffects(fx)
             if cleaned.isEmpty { out.removeValue(forKey: "effects") } else { out["effects"] = cleaned }
+        }
+        if let socialAudio = out["socialAudio"] as? [String: Any] {
+            out["socialAudio"] = compactSocialAudio(socialAudio)
         }
         let start = intValue(out["startFrame"])
         out["frames"] = [start, start + intValue(out["durationFrames"])]

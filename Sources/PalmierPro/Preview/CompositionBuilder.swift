@@ -510,6 +510,30 @@ enum CompositionBuilder {
     ) -> (audioMix: AVMutableAudioMix, videoComposition: AVVideoComposition) {
         let timescale = CMTimeScale(timeline.fps)
 
+        let voiceRanges = SocialAudioDucking.merged(ranges: timeline.tracks.enumerated()
+            .filter { $0.element.type == .audio && !$0.element.muted }
+            .flatMap { trackIndex, track in
+                track.clips.flatMap { clip -> [SocialAudioFrameRange] in
+                    guard clip.mediaType == .audio,
+                          clip.socialAudio?.role == .voice,
+                          let activity = clip.socialAudio?.speechActivity,
+                          trackMappings.contains(where: { mapping in
+                              guard !mapping.isVideo,
+                                    case .timeline(let mappedTrackIndex, let clipIds) = mapping.kind,
+                                    mappedTrackIndex == trackIndex else { return false }
+                              return clipIds?.contains(clip.id) ?? true
+                          }) else { return [] }
+                    return SocialAudioDucking.timelineSpeechRanges(
+                        activity: activity,
+                        clipStartFrame: clip.startFrame,
+                        clipDurationFrames: clip.durationFrames,
+                        trimStartFrame: clip.trimStartFrame,
+                        speed: clip.speed,
+                        fps: timeline.fps
+                    )
+                }
+            })
+
         let audioMix = AVMutableAudioMix()
         audioMix.inputParameters = trackMappings.filter { !$0.isVideo }.compactMap { mapping in
             switch mapping.kind {
@@ -545,7 +569,27 @@ enum CompositionBuilder {
                     let gain: Float = mapping.wetAudio
                         ? strength
                         : (mapping.blendedClipIds.contains(clip.id) ? 1 - strength : 1)
-                    emitVolumeEnvelope(params: params, clip: clip, timescale: timescale, gain: gain)
+                    let duckingPlan: SocialAudioDuckingPlan? = {
+                        guard clip.socialAudio?.role == .music,
+                              let amount = clip.socialAudio?.duckingAmountDb,
+                              amount > 0 else { return nil }
+                        return SocialAudioDucking.plan(
+                            musicRange: SocialAudioFrameRange(
+                                startFrame: clip.startFrame,
+                                endFrame: clip.endFrame
+                            ),
+                            voiceRanges: voiceRanges,
+                            fps: timeline.fps,
+                            duckingAmountDb: amount
+                        )
+                    }()
+                    emitVolumeEnvelope(
+                        params: params,
+                        clip: clip,
+                        timescale: timescale,
+                        gain: gain,
+                        duckingPlan: duckingPlan
+                    )
                     prevEndFrame = clip.startFrame + clip.durationFrames
                 }
                 return params
@@ -782,7 +826,8 @@ enum CompositionBuilder {
         clip: Clip,
         timescale: CMTimeScale,
         carrier: Clip? = nil,
-        gain: Float = 1
+        gain: Float = 1,
+        duckingPlan: SocialAudioDuckingPlan? = nil
     ) {
         let kfs = normalizedKeyframes(clip.volumeTrack?.keyframes ?? [], duration: clip.durationFrames)
         let hasFade = clip.fadeInFrames > 0 || clip.fadeOutFrames > 0
@@ -790,9 +835,11 @@ enum CompositionBuilder {
             ($0.volumeTrack?.isActive ?? false) || $0.fadeInFrames > 0 || $0.fadeOutFrames > 0
         } ?? false
         let gainAt: (Int) -> Double = { absFrame in
-            carrier.map { $0.volumeAt(frame: absFrame) } ?? 1
+            let carrierGain = carrier.map { $0.volumeAt(frame: absFrame) } ?? 1
+            let duckingGain = duckingPlan?.gainMultiplier(atAbsoluteFrame: absFrame) ?? 1
+            return carrierGain * duckingGain
         }
-        if kfs.isEmpty && !hasFade && !carrierVaries {
+        if kfs.isEmpty && !hasFade && !carrierVaries && duckingPlan == nil {
             let volume = Float(clip.volumeAt(frame: clip.startFrame) * gainAt(clip.startFrame)) * gain
             let start = CMTime(value: CMTimeValue(clip.startFrame), timescale: timescale)
             let end = CMTime(value: CMTimeValue(clip.endFrame), timescale: timescale)
@@ -805,7 +852,7 @@ enum CompositionBuilder {
             return
         }
 
-        var extraOffsets: [Int] = []
+        var extraOffsets = duckingPlan?.breakpointOffsets ?? []
         if let carrier, carrierVaries {
             let toClipOffset: (Int) -> Int = { carrierOffset in
                 carrier.startFrame + carrierOffset - clip.startFrame

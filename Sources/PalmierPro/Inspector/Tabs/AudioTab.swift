@@ -1,4 +1,6 @@
+import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 extension InspectorView {
 
@@ -23,6 +25,9 @@ extension InspectorView {
                         .padding(.top, AppTheme.Spacing.md)
                     denoiseRow(audios: audios)
                         .padding(.trailing, KeyframesMetrics.controlsColumnWidth + AppTheme.Spacing.sm)
+                    socialAudioSection(audios: audios)
+                        .padding(.trailing, KeyframesMetrics.controlsColumnWidth + AppTheme.Spacing.sm)
+                        .padding(.top, AppTheme.Spacing.md)
                     if nonTextVisualClips.isEmpty {
                         speedSection(clips: audios)
                             .padding(.trailing, KeyframesMetrics.controlsColumnWidth + AppTheme.Spacing.sm)
@@ -48,6 +53,7 @@ extension InspectorView {
                     sectionTitleLabel(title: "Enhance")
                     denoiseRow(audios: audios)
                 }
+                socialAudioSection(audios: audios)
                 if nonTextVisualClips.isEmpty {
                     speedSection(clips: audios)
                 }
@@ -144,6 +150,160 @@ extension InspectorView {
         }
     }
 
+
+    private func socialAudioSection(audios: [Clip]) -> some View {
+        let explicitRoles = audios.compactMap { $0.socialAudio?.role }
+        let roles = Set(explicitRoles)
+        let role = roles.count == 1 && explicitRoles.count == audios.count ? roles.first : nil
+        let singleSettings = audios.count == 1 ? audios.first?.socialAudio : nil
+        let usesSpeechDucking = editor.socialAudioPreset.usesSpeechDucking
+
+        return VStack(alignment: .leading, spacing: AppTheme.Spacing.smMd) {
+            HStack {
+                sectionTitleLabel(title: "Social Audio Mix")
+                Spacer()
+                if audios.contains(where: { $0.socialAudio != nil }) {
+                    Button("Reset") { editor.clearSocialAudioMix(clipIds: audios.map(\.id)) }
+                        .font(.system(size: AppTheme.FontSize.xs))
+                        .buttonStyle(.plain)
+                        .foregroundStyle(AppTheme.Text.tertiaryColor)
+                }
+            }
+
+            propertyRow(label: "Selected audio") {
+                Menu {
+                    ForEach(SocialAudioRole.allCases, id: \.rawValue) { candidate in
+                        Button {
+                            editor.setSocialAudioRole(clipIds: audios.map(\.id), role: candidate)
+                        } label: {
+                            if role == candidate {
+                                Label(candidate.displayName, systemImage: "checkmark")
+                            } else {
+                                Text(candidate.displayName)
+                            }
+                        }
+                    }
+                } label: {
+                    HStack(spacing: AppTheme.Spacing.xxs) {
+                        Text(role?.displayName ?? "Auto")
+                        Image(systemName: "chevron.down")
+                            .font(.system(
+                                size: AppTheme.FontSize.micro,
+                                weight: AppTheme.FontWeight.semibold
+                            ))
+                    }
+                    .font(.system(size: AppTheme.FontSize.xs))
+                    .foregroundStyle(AppTheme.Text.secondaryColor)
+                }
+                .menuStyle(.button)
+                .buttonStyle(.plain)
+                .menuIndicator(.hidden)
+            }
+            .frame(height: KeyframesMetrics.rowHeight)
+
+            propertyRow(label: "Preset") {
+                Picker("Preset", selection: Binding(
+                    get: { editor.socialAudioPreset },
+                    set: { editor.socialAudioPreset = $0 }
+                )) {
+                    ForEach(SocialAudioPreset.allCases, id: \.rawValue) { preset in
+                        Text(preset.displayName).tag(preset)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .controlSize(.small)
+            }
+            .frame(height: KeyframesMetrics.rowHeight)
+
+            HStack(spacing: AppTheme.Spacing.sm) {
+                Button {
+                    chooseSocialMusic()
+                } label: {
+                    Label("Add Music…", systemImage: "music.note")
+                        .frame(maxWidth: .infinity)
+                }
+                Button {
+                    Task { @MainActor in
+                        do {
+                            try await editor.balanceSocialAudio()
+                        } catch {
+                            editor.socialAudioMixMessage = error.localizedDescription
+                        }
+                    }
+                } label: {
+                    if editor.isSocialAudioMixing {
+                        ProgressView().controlSize(.small).frame(maxWidth: .infinity)
+                    } else {
+                        Label("Balance", systemImage: "slider.horizontal.3")
+                            .frame(maxWidth: .infinity)
+                    }
+                }
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .disabled(editor.isSocialAudioMixing)
+            .help(usesSpeechDucking
+                ? "Measure the denoised voice, normalize it, then duck music during speech"
+                : "Measure and normalize the denoised voice and music to steady levels without ducking")
+
+            if let settings = singleSettings {
+                Text(socialAudioResult(settings))
+                    .font(.system(size: AppTheme.FontSize.xs))
+                    .foregroundStyle(AppTheme.Text.tertiaryColor)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if let message = editor.socialAudioMixMessage {
+                Text(message)
+                    .font(.system(size: AppTheme.FontSize.xs))
+                    .foregroundStyle(AppTheme.Text.mutedColor)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                Text(usesSpeechDucking
+                    ? "Denoise → −16 LUFS voice → speech-aware music ducking"
+                    : "Denoise → −16 LUFS voice → steady −30 LUFS music (no ducking)")
+                    .font(.system(size: AppTheme.FontSize.xs))
+                    .foregroundStyle(AppTheme.Text.mutedColor)
+            }
+        }
+    }
+
+    private func socialAudioResult(_ settings: SocialAudioSettings) -> String {
+        guard let measured = settings.measuredLoudnessLUFS else {
+            return "\(settings.role.displayName) · not measured yet"
+        }
+        let target = settings.role == .voice
+            ? settings.preset.voiceTargetLUFS
+            : settings.preset.musicTargetLUFS
+        let sign = settings.normalizationGainDb >= 0 ? "+" : ""
+        return String(
+            format: "%@ · %.1f → %.0f LUFS · %@%.1f dB",
+            settings.role.displayName,
+            measured,
+            target,
+            sign,
+            settings.normalizationGainDb
+        )
+    }
+
+    private func chooseSocialMusic() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.message = "Choose the song you want beneath your voice"
+        panel.allowedContentTypes = [.audio]
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            Task { @MainActor in
+                do {
+                    try await editor.addMusicAndBalance(from: url)
+                } catch {
+                    editor.socialAudioMixMessage = error.localizedDescription
+                }
+            }
+        }
+    }
 
     @ViewBuilder
     private func fadeRow(label: String, clips: [Clip], edge: FadeEdge) -> some View {

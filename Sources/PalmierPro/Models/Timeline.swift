@@ -153,6 +153,7 @@ struct Clip: Codable, Sendable, Equatable, Identifiable {
     var trimEndFrame: Int = 0
     var speed: Double = 1.0
     var volume: Double = 1.0
+    var socialAudio: SocialAudioSettings?
     var fadeInFrames: Int = 0
     var fadeOutFrames: Int = 0
     var fadeInInterpolation: Interpolation = .linear
@@ -185,7 +186,7 @@ struct Clip: Codable, Sendable, Equatable, Identifiable {
 
     private enum CodingKeys: String, CodingKey {
         case id, mediaRef, mediaType, sourceClipType, startFrame, durationFrames
-        case trimStartFrame, trimEndFrame, speed, volume
+        case trimStartFrame, trimEndFrame, speed, volume, socialAudio
         case fadeInFrames, fadeOutFrames, fadeInInterpolation, fadeOutInterpolation
         case opacity, transform, crop
         case linkGroupId, captionGroupId, multicamGroupId, textContent, textStyle, textAnimation, wordTimings
@@ -274,7 +275,7 @@ struct Clip: Codable, Sendable, Equatable, Identifiable {
         } else {
             kfGain = 1.0
         }
-        return volume * kfGain * fadeMultiplier(at: frame)
+        return volume * kfGain * (socialAudio?.normalizationGain ?? 1) * fadeMultiplier(at: frame)
     }
 
     var hasDenoiseEnabled: Bool {
@@ -295,7 +296,7 @@ struct Clip: Codable, Sendable, Equatable, Identifiable {
         } else {
             kfGain = 1.0
         }
-        return volume * kfGain
+        return volume * kfGain * (socialAudio?.normalizationGain ?? 1)
     }
 
     /// 0…1 envelope from the fade head/tail ramps.
@@ -330,6 +331,20 @@ struct Clip: Codable, Sendable, Equatable, Identifiable {
 enum FadeEdge { case left, right }
 
 extension Clip {
+    private struct LegacyVoiceCleanup: Decodable {
+        let strength: Double
+
+        private enum CodingKeys: String, CodingKey { case strength }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            let value = (try? c.decode(Double.self, forKey: .strength)) ?? 1
+            strength = value.isFinite ? min(1, max(0, value)) : 1
+        }
+    }
+
+    private enum LegacyCodingKeys: String, CodingKey { case voiceCleanup }
+
     /// Fresh clip id; link/caption group ids remapped consistently via `groups`.
     mutating func freshenIds(groups: inout [String: String]) {
         func remap(_ old: String?) -> String? {
@@ -446,6 +461,18 @@ extension Clip {
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        var decodedEffects = try? c.decode([Effect].self, forKey: .effects)
+        let legacy = try? decoder.container(keyedBy: LegacyCodingKeys.self)
+            .decode(LegacyVoiceCleanup.self, forKey: .voiceCleanup)
+        if let legacy,
+           !(decodedEffects?.contains { $0.type == Clip.denoiseEffectType } ?? false) {
+            var effects = decodedEffects ?? []
+            effects.append(Effect(
+                type: Clip.denoiseEffectType,
+                params: ["amount": EffectParam(value: legacy.strength)]
+            ))
+            decodedEffects = effects
+        }
         self.init(
             id: (try? c.decode(String.self, forKey: .id)) ?? UUID().uuidString,
             mediaRef: try c.decode(String.self, forKey: .mediaRef),
@@ -457,6 +484,7 @@ extension Clip {
             trimEndFrame: (try? c.decode(Int.self, forKey: .trimEndFrame)) ?? 0,
             speed: (try? c.decode(Double.self, forKey: .speed)) ?? 1.0,
             volume: (try? c.decode(Double.self, forKey: .volume)) ?? 1.0,
+            socialAudio: try? c.decode(SocialAudioSettings.self, forKey: .socialAudio),
             fadeInFrames: (try? c.decode(Int.self, forKey: .fadeInFrames)) ?? 0,
             fadeOutFrames: (try? c.decode(Int.self, forKey: .fadeOutFrames)) ?? 0,
             fadeInInterpolation: (try? c.decode(Interpolation.self, forKey: .fadeInInterpolation)) ?? .linear,
@@ -477,7 +505,7 @@ extension Clip {
             rotationTrack: try? c.decode(KeyframeTrack<Double>.self, forKey: .rotationTrack),
             cropTrack: try? c.decode(KeyframeTrack<Crop>.self, forKey: .cropTrack),
             volumeTrack: try? c.decode(KeyframeTrack<Double>.self, forKey: .volumeTrack),
-            effects: try? c.decode([Effect].self, forKey: .effects),
+            effects: decodedEffects,
             blendMode: try? c.decode(BlendMode.self, forKey: .blendMode)
         )
     }

@@ -20,6 +20,7 @@ final class VideoEngine {
 
     private var timeObserver: Any?
     private var rebuildTask: Task<Void, Never>?
+    private var rebuildGeneration: UInt64 = 0
 
     private var trackMappings: [TrackMapping] = []
     private var clipNaturalSizes: [String: CGSize] = [:]
@@ -38,8 +39,7 @@ final class VideoEngine {
     }
 
     func teardown() {
-        rebuildTask?.cancel()
-        rebuildTask = nil
+        invalidateRebuild()
         compositionCache.removeAll()
         invalidateSeekState()
         scrubAudioEngine.teardown()
@@ -120,8 +120,7 @@ final class VideoEngine {
 
     func activateTab(_ tab: PreviewTab) {
         guard let editor else { return }
-        rebuildTask?.cancel()
-        rebuildTask = nil
+        invalidateRebuild()
         invalidateSeekState()
         pause()
 
@@ -158,7 +157,8 @@ final class VideoEngine {
 
     func rebuild() {
         guard let editor, editor.activePreviewTab == .timeline else { return }
-        rebuildTask?.cancel()
+        invalidateRebuild()
+        let generation = rebuildGeneration
 
         let mediaURLs = editor.mediaResolver.expectedURLMap()
         let missingMediaRefs = editor.missingMediaRefs
@@ -196,15 +196,16 @@ final class VideoEngine {
                     renderSize: CGSize(width: snapshot.width, height: snapshot.height)
                 )
             } catch {
+                guard generation == rebuildGeneration else { return }
+                rebuildTask = nil
                 if !Task.isCancelled {
                     Log.preview.error("rebuild failed: \(error.localizedDescription)")
                 }
-                rebuildTask = nil
                 return
             }
 
+            guard generation == rebuildGeneration, !Task.isCancelled else { return }
             rebuildTask = nil
-            guard !Task.isCancelled else { return }
 
             if result.offlineMediaRefs.isEmpty && result.unprocessableMediaRefs.isEmpty {
                 compositionCache[timelineId] = (inputs, result)
@@ -212,6 +213,12 @@ final class VideoEngine {
             compositionCache = compositionCache.filter { editor.openTimelineIds.contains($0.key) }
             apply(result, resolveTimeline: resolveTimeline, editor: editor)
         }
+    }
+
+    private func invalidateRebuild() {
+        rebuildGeneration &+= 1
+        rebuildTask?.cancel()
+        rebuildTask = nil
     }
 
     private var compositionCache: [String: (inputs: RebuildInputs, result: CompositionResult)] = [:]
