@@ -1811,6 +1811,148 @@ struct ToolExecutorTextFolderTests {
         #expect(result.isError)
     }
 
+    @Test func addTextsTrackGroupsCreateOneOrderedTrackPerVisualLine() async throws {
+        let h = ToolHarness()
+        let result = await h.runRaw("add_texts", args: [
+            "entries": [
+                [
+                    "trackGroup": "line-1", "startFrame": 0, "endFrame": 20,
+                    "content": "Here's", "textPreset": "instagramLight",
+                ],
+                [
+                    "trackGroup": "line-1", "startFrame": 20, "endFrame": 90,
+                    "content": "Here's how", "textPreset": "instagramLight",
+                ],
+                [
+                    "trackGroup": "line-2", "startFrame": 25, "endFrame": 35,
+                    "content": "we", "textPreset": "instagramLight",
+                ],
+                [
+                    "trackGroup": "line-2", "startFrame": 35, "endFrame": 90,
+                    "content": "we built", "textPreset": "instagramLight",
+                ],
+            ]
+        ])
+
+        #expect(result.isError == false, "\(ToolHarness.textOf(result))")
+        #expect(h.editor.timeline.tracks.count == 2)
+        #expect(h.editor.timeline.tracks[0].clips.map(\.textContent) == ["Here's", "Here's how"])
+        #expect(h.editor.timeline.tracks[1].clips.map(\.textContent) == ["we", "we built"])
+        #expect(h.editor.timeline.tracks[0].clips.map(\.startFrame) == [0, 20])
+        #expect(h.editor.timeline.tracks[1].clips.map(\.startFrame) == [25, 35])
+        #expect(h.editor.timeline.tracks.flatMap(\.clips).allSatisfy {
+            $0.textStyle?.background.shape == .pill
+        })
+    }
+
+    @Test func addTextsRejectsPartialTrackGroupingWithoutMutation() async throws {
+        let h = ToolHarness()
+        let before = h.editor.timeline
+        let result = await h.runRaw("add_texts", args: [
+            "entries": [
+                ["trackGroup": "line-1", "startFrame": 0, "endFrame": 30, "content": "one"],
+                ["startFrame": 30, "endFrame": 60, "content": "two"],
+            ]
+        ])
+
+        #expect(result.isError)
+        #expect(ToolHarness.textOf(result).contains("Mixed trackGroup"))
+        #expect(h.editor.timeline == before)
+    }
+
+    @Test func addTextsAppliesPresetAndExplicitGeometryOverrides() async throws {
+        let h = ToolHarness()
+        let result = await h.runRaw("add_texts", args: [
+            "entries": [[
+                "startFrame": 0,
+                "endFrame": 60,
+                "content": "Styled",
+                "textPreset": "instagramDark",
+                "lineHeight": 1.1,
+                "strokeEnabled": true,
+                "strokeColor": "#FF0000",
+                "strokeWidth": 5.5,
+                "backgroundPaddingH": 0.2,
+                "backgroundPaddingV": 0.3,
+                "backgroundCornerRadius": 0.15,
+            ]]
+        ])
+
+        #expect(result.isError == false, "\(ToolHarness.textOf(result))")
+        let style = try #require(h.editor.timeline.tracks.first?.clips.first?.textStyle)
+        #expect(style.fontName == TextStyle.systemBoldFontName)
+        #expect(style.isBold)
+        #expect(style.lineHeightMultiple == 1.1)
+        #expect(style.color == TextStyle.RGBA())
+        #expect(style.background.enabled)
+        #expect(style.background.shape == .pill)
+        #expect(style.background.paddingH == 0.2)
+        #expect(style.background.paddingV == 0.3)
+        #expect(style.background.cornerRadius == 0.15)
+        #expect(style.border.enabled)
+        #expect(style.border.color == TextStyle.RGBA(hex: "#FF0000"))
+        #expect(style.border.width == 5.5)
+    }
+
+    @Test func addTextsRejectsOutOfRangeTextGeometryWithoutMutation() async throws {
+        for (field, value) in [
+            ("lineHeight", 3.0),
+            ("strokeWidth", 21.0),
+            ("backgroundPaddingH", -0.1),
+            ("backgroundCornerRadius", 0.7),
+        ] {
+            let h = ToolHarness()
+            let before = h.editor.timeline
+            let result = await h.runRaw("add_texts", args: [
+                "entries": [[
+                    "startFrame": 0, "endFrame": 30, "content": "x", field: value,
+                ]]
+            ])
+
+            #expect(result.isError, "\(field) should be rejected")
+            #expect(ToolHarness.textOf(result).contains(field))
+            #expect(h.editor.timeline == before)
+        }
+    }
+
+    @Test func updateTextStrokeColorAliasEnablesStrokeAndRefits() async throws {
+        var style = TextStyle()
+        style.shadow.enabled = false
+        let timeline = Fixtures.timeline()
+        let natural = TextLayout.naturalSize(
+            content: "Refit", style: style,
+            maxWidth: CGFloat(timeline.width) * 0.9,
+            canvasHeight: CGFloat(timeline.height)
+        )
+        var clip = Fixtures.clip(
+            id: "title", mediaRef: "text", mediaType: .text, start: 0, duration: 60
+        )
+        clip.textContent = "Refit"
+        clip.textStyle = style
+        clip.transform = Transform(
+            center: (0.5, 0.5),
+            width: Double(natural.width) / Double(timeline.width),
+            height: Double(natural.height) / Double(timeline.height)
+        )
+        var populated = timeline
+        populated.tracks = [Fixtures.videoTrack(clips: [clip])]
+        let h = ToolHarness(timeline: populated)
+        let beforeWidth = h.editor.timeline.tracks[0].clips[0].transform.width
+
+        let result = await h.runRaw("update_text", args: [
+            "clipIds": ["title"],
+            "borderColor": "#123456",
+            "lineHeightMultiple": 1.2,
+        ])
+
+        #expect(result.isError == false, "\(ToolHarness.textOf(result))")
+        let updated = h.editor.timeline.tracks[0].clips[0]
+        #expect(updated.textStyle?.border.enabled == true)
+        #expect(updated.textStyle?.border.color == TextStyle.RGBA(hex: "#123456"))
+        #expect(updated.textStyle?.lineHeightMultiple == 1.2)
+        #expect(updated.transform.width > beforeWidth, "enabling stroke by colour must reserve outline space")
+    }
+
     // MARK: - organize_media
 
     @Test func organizeCreatesNestedFolderPathsAndIsIdempotent() async throws {

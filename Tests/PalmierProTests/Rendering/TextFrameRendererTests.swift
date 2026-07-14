@@ -126,4 +126,71 @@ struct TextFrameRendererTests {
         #expect(totalRed > 10, "expected visible red glyph outline")
         #expect(edgeRed < 50, "border should not render a rectangular clip box")
     }
+
+    @Test func legacyBoxFillsTransformWhilePillHugsText() {
+        let size = CGSize(width: 640, height: 360)
+        let transform = Transform(topLeft: (0.1, 0.2), width: 0.8, height: 0.5)
+        var style = TextStyle()
+        style.fontSize = 90
+        style.shadow.enabled = false
+        style.background = .init(
+            enabled: true,
+            color: .init(r: 1, g: 0, b: 0, a: 1),
+            shape: .box
+        )
+
+        let boxImage = TextFrameRenderer.image(
+            clip: textClip(content: "PILL", style: style, transform: transform),
+            frame: 0,
+            renderSize: size
+        )!
+        style.background.shape = .pill
+        let pillImage = TextFrameRenderer.image(
+            clip: textClip(content: "PILL", style: style, transform: transform),
+            frame: 0,
+            renderSize: size
+        )!
+        let boxPixels = rawPixels(boxImage, size: size)
+        let pillPixels = rawPixels(pillImage, size: size)
+        let width = Int(size.width)
+        let x = Int(transform.topLeft.x * size.width) + 3
+        let yUp = Int(size.height - (transform.topLeft.y + transform.height) * size.height) + 3
+        let index = (yUp * width + x) * 4
+
+        #expect(boxPixels[index + 3] > 200, "legacy box background must still fill its transform")
+        #expect(pillPixels[index + 3] < 10, "pill background must not fill a distant transform corner")
+    }
+
+    @Test func configurableStrokeWidthChangesRenderedOutline() {
+        let size = CGSize(width: 640, height: 360)
+        let transform = Transform(topLeft: (0.15, 0.2), width: 0.7, height: 0.55)
+
+        func redPixelCount(width strokeWidth: Double) -> Int {
+            var style = TextStyle()
+            style.fontSize = 180
+            style.color = .init(r: 1, g: 1, b: 1, a: 1)
+            style.shadow.enabled = false
+            style.border = .init(
+                enabled: true,
+                color: .init(r: 1, g: 0, b: 0, a: 1),
+                width: strokeWidth
+            )
+            let image = TextFrameRenderer.image(
+                clip: textClip(content: "A", style: style, transform: transform),
+                frame: 0,
+                renderSize: size
+            )!
+            let pixels = rawPixels(image, size: size)
+            return stride(from: 0, to: pixels.count, by: 4).filter { index in
+                pixels[index] > 96 && pixels[index + 1] < 80
+                    && pixels[index + 2] < 80 && pixels[index + 3] > 32
+            }.count
+        }
+
+        let thin = redPixelCount(width: 2)
+        let thick = redPixelCount(width: 12)
+
+        #expect(thin > 10)
+        #expect(thick > thin * 2, "a wider configured stroke should produce a materially wider outline")
+    }
 }

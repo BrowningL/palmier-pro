@@ -195,6 +195,91 @@ struct ProjectRoundTripTests {
         #expect(style.fontScale == 1.0)
     }
 
+    @Test func legacyUpstreamTextBackgroundAndStrokeKeepTheirAppearance() throws {
+        let json = """
+        {
+          "fontName": "Helvetica-Bold",
+          "fontSize": 96,
+          "background": {
+            "enabled": true,
+            "color": {"r": 1, "g": 1, "b": 1, "a": 1}
+          },
+          "border": {
+            "enabled": true,
+            "color": {"r": 0, "g": 0, "b": 0, "a": 1}
+          }
+        }
+        """
+
+        let style = try JSONDecoder().decode(TextStyle.self, from: Data(json.utf8))
+
+        #expect(style.background.shape == .box)
+        #expect(style.border.width == TextStyle.Stroke.legacyUpstreamWidth)
+        #expect(style.lineHeightMultiple == 1)
+    }
+
+    @Test func forkTextGeometryMigratesToPillAndPreservesValues() throws {
+        let json = """
+        {
+          "fontName": "Space Grotesk",
+          "fontSize": 64,
+          "lineHeightMultiple": 0.88,
+          "background": {
+            "enabled": true,
+            "color": {"r": 1, "g": 1, "b": 1, "a": 1},
+            "paddingH": 0.31,
+            "paddingV": 0.42,
+            "cornerRadius": 0.18
+          },
+          "border": {
+            "enabled": true,
+            "color": {"r": 0, "g": 0, "b": 0, "a": 1},
+            "width": 2.75
+          }
+        }
+        """
+
+        let style = try JSONDecoder().decode(TextStyle.self, from: Data(json.utf8))
+
+        #expect(style.background.shape == .pill)
+        #expect(style.background.paddingH == 0.31)
+        #expect(style.background.paddingV == 0.42)
+        #expect(style.background.cornerRadius == 0.18)
+        #expect(style.border.width == 2.75)
+        #expect(style.lineHeightMultiple == 0.88)
+        #expect(try roundTrip(style) == style)
+    }
+
+    @Test func instagramPresetRoundTripsWithExplicitPillAndStrokeDefaults() throws {
+        var style = TextStyle()
+        style.apply(.instagramLight)
+        style.border.enabled = true
+
+        let decoded = try roundTrip(style)
+
+        #expect(decoded == style)
+        #expect(decoded.fontName == TextStyle.systemBoldFontName)
+        #expect(decoded.isBold)
+        #expect(decoded.lineHeightMultiple == TextStyle.instagramLineHeightMultiple)
+        #expect(decoded.background.shape == .pill)
+        #expect(decoded.border.width == TextStyle.Stroke.defaultWidth)
+        #expect(decoded.shadow.enabled == false)
+    }
+
+    @Test func legacySFProBoldSentinelInfersBoldTrait() throws {
+        let json = """
+        {
+          "fontName": "SF Pro Bold",
+          "fontSize": 60
+        }
+        """
+
+        let style = try JSONDecoder().decode(TextStyle.self, from: Data(json.utf8))
+
+        #expect(style.isBold)
+        #expect(style.isItalic == false)
+    }
+
     // MARK: - MediaManifest
 
     @Test func mediaManifestSurvivesRoundTripWithBothSourceKinds() throws {

@@ -1,34 +1,52 @@
 import Foundation
 
 struct ParsedTextStylePatch {
+    let preset: TextStyle.Preset?
     let fontName: String?
     let fontSize: Double?
+    let lineHeight: Double?
     let isBold: Bool?
     let isItalic: Bool?
     let color: TextStyle.RGBA?
     let alignment: TextStyle.Alignment?
-    let borderColor: TextStyle.RGBA?
+    let strokeEnabled: Bool?
+    let strokeColor: TextStyle.RGBA?
+    let strokeWidth: Double?
+    let backgroundEnabled: Bool?
+    let backgroundShape: TextStyle.Background.Shape?
     let backgroundColor: TextStyle.RGBA?
+    let backgroundPaddingH: Double?
+    let backgroundPaddingV: Double?
+    let backgroundCornerRadius: Double?
 
     var hasAnyField: Bool {
-        fontName != nil || fontSize != nil || isBold != nil || isItalic != nil
-            || color != nil || alignment != nil
-            || borderColor != nil
-            || backgroundColor != nil
+        preset != nil || fontName != nil || fontSize != nil || lineHeight != nil
+            || isBold != nil || isItalic != nil || color != nil || alignment != nil
+            || strokeEnabled != nil || strokeColor != nil || strokeWidth != nil
+            || backgroundEnabled != nil || backgroundShape != nil || backgroundColor != nil
+            || backgroundPaddingH != nil || backgroundPaddingV != nil || backgroundCornerRadius != nil
     }
 
     var affectsLayout: Bool {
-        fontName != nil || fontSize != nil || isBold != nil || isItalic != nil
+        preset != nil || fontName != nil || fontSize != nil || lineHeight != nil
+            || isBold != nil || isItalic != nil
+            || strokeEnabled != nil || strokeColor != nil || strokeWidth != nil
+            || backgroundEnabled != nil || backgroundColor != nil || backgroundShape != nil
+            || backgroundPaddingH != nil || backgroundPaddingV != nil
     }
 }
 
 let agentTextStylePatchAllowedKeys: Set<String> = [
-    "fontName", "fontSize", "isBold", "isItalic", "color", "alignment",
-    "borderColor", "backgroundColor",
+    "textPreset", "fontName", "fontSize", "lineHeight", "lineHeightMultiple",
+    "isBold", "isItalic", "color", "alignment",
+    "borderColor", "strokeEnabled", "strokeColor", "strokeWidth",
+    "backgroundEnabled", "backgroundShape", "backgroundColor",
+    "backgroundPaddingH", "backgroundPaddingV", "backgroundCornerRadius",
 ]
 
 fileprivate struct PartialTextSpec {
     let trackId: String?
+    let trackGroup: String?
     let startFrame: Int
     let durationFrames: Int
     let content: String
@@ -39,7 +57,7 @@ fileprivate struct PartialTextSpec {
 
 extension ToolExecutor {
     private static let addTextsAllowedKeys: Set<String> = Set([
-        "trackIndex", "startFrame", "endFrame", "content",
+        "trackIndex", "trackGroup", "startFrame", "endFrame", "content",
         "transform", "animation", "highlightColor",
     ]).union(agentTextStylePatchAllowedKeys)
 
@@ -48,36 +66,126 @@ extension ToolExecutor {
         "transform", "animation", "highlightColor",
     ]).union(agentTextStylePatchAllowedKeys)
 
+    private func parseTextPreset(_ raw: String?, path: String) throws -> TextStyle.Preset? {
+        guard let raw else { return nil }
+        guard let preset = TextStyle.Preset(rawValue: raw) else {
+            throw ToolError("\(path).textPreset: expected instagramLight or instagramDark")
+        }
+        return preset
+    }
+
+    private func parseBackgroundShape(
+        _ raw: String?, path: String
+    ) throws -> TextStyle.Background.Shape? {
+        guard let raw else { return nil }
+        guard let shape = TextStyle.Background.Shape(rawValue: raw) else {
+            throw ToolError("\(path).backgroundShape: expected box or pill")
+        }
+        return shape
+    }
+
+    private func bounded(
+        _ value: Double?, range: ClosedRange<Double>, field: String, path: String
+    ) throws -> Double? {
+        guard let value else { return nil }
+        guard value.isFinite, range.contains(value) else {
+            throw ToolError("\(path).\(field): expected \(range.lowerBound)...\(range.upperBound)")
+        }
+        return value
+    }
+
     func parseTextStylePatch(_ args: [String: Any], path: String) throws -> ParsedTextStylePatch {
+        let lineHeight = args.double("lineHeight") ?? args.double("lineHeightMultiple")
+        let strokeHex = args.string("strokeColor") ?? args.string("borderColor")
         return ParsedTextStylePatch(
+            preset: try parseTextPreset(args.string("textPreset"), path: path),
             fontName: args.string("fontName"),
             fontSize: args.double("fontSize"),
+            lineHeight: try bounded(
+                lineHeight, range: TextStyle.lineHeightRange, field: "lineHeight", path: path
+            ),
             isBold: args.bool("isBold"),
             isItalic: args.bool("isItalic"),
             color: try parseColorHex(args.string("color"), path: "\(path).color"),
             alignment: try parseAlignment(args.string("alignment"), path: path),
-            borderColor: try parseColorHex(args.string("borderColor"), path: "\(path).borderColor"),
-            backgroundColor: try parseColorHex(args.string("backgroundColor"), path: "\(path).backgroundColor")
+            strokeEnabled: args.bool("strokeEnabled"),
+            strokeColor: try parseColorHex(strokeHex, path: "\(path).strokeColor"),
+            strokeWidth: try bounded(
+                args.double("strokeWidth"), range: TextStyle.Stroke.widthRange,
+                field: "strokeWidth", path: path
+            ),
+            backgroundEnabled: args.bool("backgroundEnabled"),
+            backgroundShape: try parseBackgroundShape(args.string("backgroundShape"), path: path),
+            backgroundColor: try parseColorHex(
+                args.string("backgroundColor"), path: "\(path).backgroundColor"
+            ),
+            backgroundPaddingH: try bounded(
+                args.double("backgroundPaddingH"), range: TextStyle.Background.paddingRange,
+                field: "backgroundPaddingH", path: path
+            ),
+            backgroundPaddingV: try bounded(
+                args.double("backgroundPaddingV"), range: TextStyle.Background.paddingRange,
+                field: "backgroundPaddingV", path: path
+            ),
+            backgroundCornerRadius: try bounded(
+                args.double("backgroundCornerRadius"), range: TextStyle.Background.cornerRadiusRange,
+                field: "backgroundCornerRadius", path: path
+            )
         )
     }
 
     static func applyTextStylePatch(_ patch: ParsedTextStylePatch, to style: inout TextStyle) -> [String] {
         var changed: [String] = []
+        if let preset = patch.preset { style.apply(preset); changed.append("textPreset") }
         if let f = patch.fontName { style.fontName = f; changed.append("fontName") }
         if let s = patch.fontSize { style.fontSize = s; changed.append("fontSize") }
+        if let h = patch.lineHeight { style.lineHeightMultiple = h; changed.append("lineHeight") }
         if let b = patch.isBold { style.isBold = b; changed.append("isBold") }
         if let i = patch.isItalic { style.isItalic = i; changed.append("isItalic") }
         if let c = patch.color { style.color = c; changed.append("color") }
         if let a = patch.alignment { style.alignment = a; changed.append("alignment") }
-        if let c = patch.borderColor {
+        if let c = patch.strokeColor {
             style.border.color = c
             style.border.enabled = true
-            changed.append("borderColor")
+            changed.append("strokeColor")
+        }
+        if let width = patch.strokeWidth {
+            style.border.width = width
+            style.border.enabled = width > 0
+            changed.append("strokeWidth")
         }
         if let c = patch.backgroundColor {
             style.background.color = c
             style.background.enabled = true
             changed.append("backgroundColor")
+        }
+        if let shape = patch.backgroundShape {
+            style.background.shape = shape
+            changed.append("backgroundShape")
+        } else if patch.backgroundPaddingH != nil
+                    || patch.backgroundPaddingV != nil
+                    || patch.backgroundCornerRadius != nil {
+            style.background.shape = .pill
+        }
+        if let value = patch.backgroundPaddingH {
+            style.background.paddingH = value
+            changed.append("backgroundPaddingH")
+        }
+        if let value = patch.backgroundPaddingV {
+            style.background.paddingV = value
+            changed.append("backgroundPaddingV")
+        }
+        if let value = patch.backgroundCornerRadius {
+            style.background.cornerRadius = value
+            changed.append("backgroundCornerRadius")
+        }
+        if let enabled = patch.strokeEnabled {
+            style.border.enabled = enabled
+            changed.append("strokeEnabled")
+        }
+        if let enabled = patch.backgroundEnabled {
+            style.background.enabled = enabled
+            changed.append("backgroundEnabled")
         }
         return changed
     }
@@ -147,6 +255,13 @@ extension ToolExecutor {
             try validateUnknownKeys(entry, allowed: Self.addTextsAllowedKeys, path: path)
 
             let trackIndex = entry.int("trackIndex")
+            let trackGroup = entry.string("trackGroup")?.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let trackGroup, trackGroup.isEmpty {
+                throw ToolError("\(path): trackGroup must not be empty")
+            }
+            if trackIndex != nil, trackGroup != nil {
+                throw ToolError("\(path): trackGroup is only valid when trackIndex is omitted")
+            }
             let startFrame = try entry.requireInt("startFrame")
             let endFrame = try entry.requireInt("endFrame")
             let content = try entry.requireString("content")
@@ -181,6 +296,7 @@ extension ToolExecutor {
 
             partials.append(.init(
                 trackId: trackId,
+                trackGroup: trackGroup,
                 startFrame: startFrame,
                 durationFrames: durationFrames,
                 content: content,
@@ -195,22 +311,37 @@ extension ToolExecutor {
         guard omittedCount == 0 || omittedCount == partials.count else {
             throw ToolError("Mixed trackIndex: \(omittedCount) of \(partials.count) entries omitted trackIndex. Either set it on every entry or omit it on every entry (to auto-create a shared new track).")
         }
+        let groupedCount = partials.filter { $0.trackGroup != nil }.count
+        guard groupedCount == 0 || groupedCount == partials.count else {
+            throw ToolError("Mixed trackGroup: when one auto-created entry uses trackGroup, every entry must use it.")
+        }
 
         let snapshot = timelineSnapshot(editor)
         let actionName = partials.count == 1 ? "Add Text (Agent)" : "Add Texts (Agent)"
         try withUndoGroup(editor, actionName: actionName) {
-            var createdTrackId: String? = nil
-            let resolvedTrackId: String?
+            var createdTrackIds: [String] = []
+            var trackIdByGroup: [String: String] = [:]
+            let sharedGroup = "__shared__"
             if omittedCount == partials.count {
-                let newIdx = editor.insertTrack(at: 0, type: .video)
-                createdTrackId = editor.timeline.tracks.indices.contains(newIdx) ? editor.timeline.tracks[newIdx].id : nil
-                resolvedTrackId = createdTrackId
-            } else {
-                resolvedTrackId = nil  // each partial already has its own trackId
+                let groups: [String]
+                if groupedCount == partials.count {
+                    groups = partials.compactMap(\.trackGroup).reduce(into: []) { result, group in
+                        if !result.contains(group) { result.append(group) }
+                    }
+                } else {
+                    groups = [sharedGroup]
+                }
+                for group in groups.reversed() {
+                    let index = editor.insertTrack(at: 0, type: .video)
+                    guard editor.timeline.tracks.indices.contains(index) else { continue }
+                    let id = editor.timeline.tracks[index].id
+                    trackIdByGroup[group] = id
+                    createdTrackIds.append(id)
+                }
             }
 
             let resolvedSpecs: [EditorViewModel.TextClipSpec] = partials.compactMap { p in
-                let id = resolvedTrackId ?? p.trackId
+                let id = p.trackId ?? trackIdByGroup[p.trackGroup ?? sharedGroup]
                 guard let id, let trackIdx = editor.timeline.tracks.firstIndex(where: { $0.id == id }) else {
                     return nil
                 }
@@ -224,11 +355,15 @@ extension ToolExecutor {
                     animation: p.animation
                 )
             }
+            guard resolvedSpecs.count == partials.count else {
+                editor.removeTracks(ids: createdTrackIds)
+                throw ToolError("Failed to resolve every target text track")
+            }
 
             let ids = editor.placeTextClips(resolvedSpecs)
-            guard !ids.isEmpty else {
-                if let tid = createdTrackId { editor.removeTrack(id: tid) }
-                throw ToolError("Failed to place any text clips")
+            guard ids.count == resolvedSpecs.count else {
+                editor.removeTracks(ids: createdTrackIds)
+                throw ToolError("Failed to place every text clip")
             }
 
             editor.registerTimelineUndo { vm in

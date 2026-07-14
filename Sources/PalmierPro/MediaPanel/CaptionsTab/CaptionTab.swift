@@ -292,6 +292,16 @@ struct CaptionTab: View {
                     onChanged: { style.fontSize = $0 }
                 ) { style.fontSize = $0 }
             }
+            InspectorRow(icon: "arrow.up.and.down.text.horizontal", label: "Line Height") {
+                ScrubbableNumberField(
+                    value: style.lineHeightMultiple,
+                    range: TextStyle.lineHeightRange,
+                    displayMultiplier: 100,
+                    format: "%.0f",
+                    valueSuffix: "%",
+                    onChanged: { style.lineHeightMultiple = $0 }
+                ) { style.lineHeightMultiple = $0 }
+            }
             InspectorRow(icon: "paintpalette", label: "Color") {
                 ColorField(displayColor: style.color.swiftUIColor, onUserChange: { style.color = TextStyle.RGBA($0) })
             }
@@ -309,6 +319,37 @@ struct CaptionTab: View {
                         .tint(AppTheme.Text.primaryColor.opacity(AppTheme.Opacity.strong))
                 }
             }
+            if style.background.enabled {
+                InspectorRow(icon: "rectangle.on.rectangle", label: "Shape") {
+                    Picker("", selection: $style.background.shape) {
+                        Text("Box").tag(TextStyle.Background.Shape.box)
+                        Text("Pill").tag(TextStyle.Background.Shape.pill)
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .fixedSize()
+                }
+                if style.background.shape == .pill {
+                    captionStyleMetricRow(
+                        icon: "arrow.left.and.right",
+                        label: "Padding H",
+                        value: $style.background.paddingH,
+                        range: TextStyle.Background.paddingRange
+                    )
+                    captionStyleMetricRow(
+                        icon: "arrow.up.and.down",
+                        label: "Padding V",
+                        value: $style.background.paddingV,
+                        range: TextStyle.Background.paddingRange
+                    )
+                    captionStyleMetricRow(
+                        icon: "rectangle.roundedtop",
+                        label: "Corner",
+                        value: $style.background.cornerRadius,
+                        range: TextStyle.Background.cornerRadiusRange
+                    )
+                }
+            }
             InspectorRow(icon: "a.square", label: "Outline") {
                 HStack(spacing: AppTheme.Spacing.sm) {
                     ColorField(displayColor: style.border.color.swiftUIColor) {
@@ -321,6 +362,22 @@ struct CaptionTab: View {
                         .toggleStyle(.switch)
                         .controlSize(.mini)
                         .tint(AppTheme.Text.primaryColor.opacity(AppTheme.Opacity.strong))
+                }
+            }
+            if style.border.enabled {
+                captionStyleMetricRow(
+                    icon: "lineweight",
+                    label: "Thickness",
+                    value: $style.border.width,
+                    range: TextStyle.Stroke.widthRange,
+                    displayMultiplier: 1,
+                    format: "%.1f"
+                )
+            }
+            InspectorRow(icon: "wand.and.stars", label: "Preset") {
+                HStack(spacing: AppTheme.Spacing.sm) {
+                    captionPresetButton("IG Dark", .instagramDark)
+                    captionPresetButton("IG Light", .instagramLight)
                 }
             }
             InspectorRow(icon: "textformat", label: "Case") {
@@ -339,6 +396,33 @@ struct CaptionTab: View {
                 .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize().focusable(false)
             }
         }
+    }
+
+    private func captionStyleMetricRow(
+        icon: String,
+        label: String,
+        value: Binding<Double>,
+        range: ClosedRange<Double>,
+        displayMultiplier: Double = 100,
+        format: String = "%.0f"
+    ) -> some View {
+        InspectorRow(icon: icon, label: label) {
+            ScrubbableNumberField(
+                value: value.wrappedValue,
+                range: range,
+                displayMultiplier: displayMultiplier,
+                format: format,
+                valueSuffix: "%",
+                onChanged: { value.wrappedValue = $0 }
+            ) { value.wrappedValue = $0 }
+        }
+    }
+
+    private func captionPresetButton(_ title: String, _ preset: TextStyle.Preset) -> some View {
+        Button(title) { style.apply(preset) }
+            .font(.system(size: AppTheme.FontSize.sm, weight: AppTheme.FontWeight.medium))
+            .buttonStyle(.bordered)
+            .controlSize(.small)
     }
 
     private var animationSection: some View {

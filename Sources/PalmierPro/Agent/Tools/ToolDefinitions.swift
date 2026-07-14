@@ -703,7 +703,7 @@ enum ToolDefinitions {
         ),
         AgentTool(
             name: .addTexts,
-            description: "Adds text clips as timeline layers. Omit trackIndex on every entry to create one new top video track; otherwise set trackIndex on every entry. Transform is normalized text-box center/size; center-only auto-fits, all four fields override the box. Use add_captions for spoken audio captions. Unknown fields are rejected.",
+            description: "Adds text clips as timeline layers. Omit trackIndex on every entry to create one new top video track; otherwise set trackIndex on every entry. To atomically create simultaneous stacked text tracks, omit trackIndex and set trackGroup on every entry: equal groups share a track and first-seen groups stay top-to-bottom. Transform is normalized text-box center/size; center-only auto-fits, all four fields override the box. Use add_captions for conventional spoken captions and add_texts for cumulative growing-pill reveals. Unknown fields are rejected.",
             inputSchema: objectSchema(
                 properties: [
                     "entries": [
@@ -713,6 +713,7 @@ enum ToolDefinitions {
                             "type": "object",
                             "properties": mergedProperties([
                                 "trackIndex": ["type": "integer", "description": "Existing non-audio track. Omit on all entries to create a new top track."],
+                                "trackGroup": ["type": "string", "description": "With every trackIndex omitted, entries sharing this value use one auto-created track; distinct values create layered tracks."],
                                 "startFrame": ["type": "integer", "description": "Timeline start frame."],
                                 "endFrame": ["type": "integer", "description": "Occupy timeline frames [startFrame, endFrame) — copy a clip's frames pair to title exactly that span."],
                                 "content": ["type": "string", "description": "Text. Supports \\n."],
@@ -734,7 +735,7 @@ enum ToolDefinitions {
         ),
         AgentTool(
             name: .updateText,
-            description: "Updates text clips or a captionGroupId. Use for content, typography, color, outline color, background color, animation, or text-box transform. Content/typography changes auto-fit the box unless transform is passed. Unknown fields are rejected.",
+            description: "Updates text clips or a captionGroupId. Use for content, typography, Instagram presets, pill geometry, configurable glyph outlines, animation, or text-box transform. Layout-affecting changes auto-fit the box unless transform is passed. Unknown fields are rejected.",
             inputSchema: objectSchema(
                 properties: mergedProperties([
                     "clipIds": [
@@ -1069,14 +1070,25 @@ enum ToolDefinitions {
 
     private static func textStyleProperties() -> [String: [String: Any]] {
         [
-            "fontName": ["type": "string", "description": "Font name."],
+            "textPreset": ["type": "string", "enum": ["instagramLight", "instagramDark"], "description": "Complete Instagram font, line-height, pill, colors, and shadow treatment. Explicit fields override it."],
+            "fontName": ["type": "string", "description": "Font name. Bundled Creator fonts include Space Grotesk and IBM Plex Mono."],
             "fontSize": ["type": "number", "description": "Canvas points."],
+            "lineHeight": ["type": "number", "description": "Line-height multiple, 0.5-2.0."],
+            "lineHeightMultiple": ["type": "number", "description": "Alias for lineHeight."],
             "isBold": ["type": "boolean", "description": "Bold."],
             "isItalic": ["type": "boolean", "description": "Italic."],
             "color": ["type": "string", "description": "Text color hex."],
             "alignment": ["type": "string", "enum": ["left", "center", "right"], "description": "Text alignment."],
-            "borderColor": ["type": "string", "description": "Text outline hex; enables outline."],
-            "backgroundColor": ["type": "string", "description": "Text box fill hex; enables fill."],
+            "borderColor": ["type": "string", "description": "Compatibility alias for strokeColor."],
+            "strokeEnabled": ["type": "boolean", "description": "Toggle the glyph outline."],
+            "strokeColor": ["type": "string", "description": "Glyph-outline hex; enables outline unless strokeEnabled is false."],
+            "strokeWidth": ["type": "number", "description": "Glyph-outline width as 0-20 percent of font size."],
+            "backgroundEnabled": ["type": "boolean", "description": "Toggle the text background."],
+            "backgroundShape": ["type": "string", "enum": ["box", "pill"], "description": "Full text box or per-line rounded pill."],
+            "backgroundColor": ["type": "string", "description": "Text background hex; enables it unless backgroundEnabled is false."],
+            "backgroundPaddingH": ["type": "number", "description": "Pill horizontal padding as 0-1 of font size; implies pill shape."],
+            "backgroundPaddingV": ["type": "number", "description": "Pill vertical padding as 0-1 of font size; implies pill shape."],
+            "backgroundCornerRadius": ["type": "number", "description": "Pill corner radius as 0-0.6 of font size; implies pill shape."],
         ]
     }
 

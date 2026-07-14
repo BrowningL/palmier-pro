@@ -5,7 +5,16 @@ import CoreText
 /// Renders a text clip as a CIImage using CoreText on the compositor queue
 enum TextFrameRenderer {
     // NSCache is internally thread-safe; the compositor queue and main thread both hit it.
-    nonisolated(unsafe) private static let cache = NSCache<NSString, CIImage>()
+    nonisolated(unsafe) private static let cache: NSCache<NSString, CIImage> = {
+        let cache = NSCache<NSString, CIImage>()
+        cache.totalCostLimit = 256 * 1_024 * 1_024
+        cache.countLimit = 256
+        return cache
+    }()
+
+    static func clearCache() {
+        cache.removeAllObjects()
+    }
 
     static func image(clip: Clip, frame: Int, renderSize: CGSize) -> CIImage? {
         guard renderSize.width >= 1, renderSize.height >= 1 else { return nil }
@@ -14,15 +23,16 @@ enum TextFrameRenderer {
         let style = clip.textStyle ?? TextStyle()
         let box = boxRect(clip.transform, renderSize)
         let fontSize = CGFloat(style.fontSize * style.fontScale) * (renderSize.height / TextLayout.referenceCanvasHeight)
+        let textRect = textRect(style: style, box: box, fontSize: fontSize)
         let anim = clip.textAnimation
 
         if let anim, anim.isActive {
             switch anim.preset.renderMode {
             case .perWord:
-                return renderPerWord(clip: clip, content: content, style: style, box: box,
+                return renderPerWord(clip: clip, content: content, style: style, box: box, textRect: textRect,
                                      fontSize: fontSize, anim: anim, frame: frame, renderSize: renderSize)
             case .typewriter:
-                return renderTypewriter(clip: clip, content: content, style: style, box: box,
+                return renderTypewriter(clip: clip, content: content, style: style, box: box, textRect: textRect,
                                         fontSize: fontSize, frame: frame, renderSize: renderSize)
             case .entrance:
                 break
@@ -31,7 +41,8 @@ enum TextFrameRenderer {
 
         // Static base is frame-independent → cache it. Entrance reuses it under a transform.
         guard let base = cachedStatic(content: content, style: style, transform: clip.transform,
-                                      box: box, fontSize: fontSize, renderSize: renderSize) else { return nil }
+                                      box: box, textRect: textRect, fontSize: fontSize,
+                                      renderSize: renderSize) else { return nil }
         guard let anim, anim.isActive else { return base }
         return applyEntrance(base, TextAnimator.clipEntry(anim, rel: frame - clip.startFrame),
                              box: box, renderSize: renderSize)
@@ -47,8 +58,16 @@ enum TextFrameRenderer {
                       width: max(1, t.width * size.width), height: h)
     }
 
-    /// A render-sized context with the box fill and shadow already applied.
-    private static func beginContext(style: TextStyle, box: CGRect, renderSize: CGSize) -> CGContext? {
+    private static func textRect(style: TextStyle, box: CGRect, fontSize: CGFloat) -> CGRect {
+        let pill = style.background.enabled && style.background.shape == .pill
+        let stroke = style.strokeInset(fontSize: fontSize)
+        let horizontal = (pill ? fontSize * CGFloat(style.background.clampedPaddingH) : 0) + stroke
+        let vertical = (pill ? fontSize * CGFloat(style.background.clampedPaddingV) : 0) + stroke
+        let inset = box.insetBy(dx: horizontal, dy: vertical)
+        return inset.width >= 1 && inset.height >= 1 ? inset : box
+    }
+
+    private static func beginContext(renderSize: CGSize) -> CGContext? {
         guard let ctx = CGContext(
             data: nil, width: Int(renderSize.width.rounded()), height: Int(renderSize.height.rounded()),
             bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!,
@@ -60,8 +79,6 @@ enum TextFrameRenderer {
         ctx.setShouldSmoothFonts(true)
         ctx.setAllowsFontSubpixelPositioning(true)
         ctx.setShouldSubpixelPositionFonts(true)
-        drawBox(ctx, style: style, box: box)
-        applyShadow(ctx, style: style, renderSize: renderSize)
         return ctx
     }
 
@@ -71,24 +88,40 @@ enum TextFrameRenderer {
         return CIImage(cgImage: cg, options: [.colorSpace: NSNull()])
     }
 
-    /// Tall top-anchored layout path so CoreText never drops a line overflowing the box
-    /// (CATextLayer didn't clip vertically either). Box width drives wrapping.
-    private static func layoutFrame(_ attr: NSAttributedString, box: CGRect) -> CTFrame {
+    private static func layoutFrame(_ attr: NSAttributedString, box: CGRect, finiteHeight: Bool) -> CTFrame {
         let setter = CTFramesetterCreateWithAttributedString(attr as CFAttributedString)
-        let path = CGPath(rect: CGRect(x: box.minX, y: 0, width: box.width, height: box.maxY), transform: nil)
+        let rect = finiteHeight
+            ? box
+            : CGRect(x: box.minX, y: 0, width: box.width, height: box.maxY)
+        let path = CGPath(rect: rect, transform: nil)
         return CTFramesetterCreateFrame(setter, CFRange(location: 0, length: 0), path, nil)
     }
 
     // MARK: - Static
 
     private static func cachedStatic(content: String, style: TextStyle, transform: Transform,
-                                     box: CGRect, fontSize: CGFloat, renderSize: CGSize) -> CIImage? {
+                                     box: CGRect, textRect: CGRect, fontSize: CGFloat,
+                                     renderSize: CGSize) -> CIImage? {
         let key = signature(content, style, transform, renderSize)
         if let cached = cache.object(forKey: key) { return cached }
-        guard let ctx = beginContext(style: style, box: box, renderSize: renderSize) else { return nil }
-        CTFrameDraw(layoutFrame(NSAttributedString(string: content, attributes: style.attributes(size: fontSize)), box: box), ctx)
+        guard let ctx = beginContext(renderSize: renderSize) else { return nil }
+        let attributed = NSAttributedString(string: content, attributes: style.attributes(size: fontSize))
+        drawBackground(
+            ctx, attributed: attributed, style: style, box: box, textRect: textRect,
+            fontSize: fontSize, renderSize: renderSize
+        )
+        applyShadow(ctx, style: style, renderSize: renderSize)
+        CTFrameDraw(
+            layoutFrame(
+                attributed,
+                box: textRect,
+                finiteHeight: style.background.enabled && style.background.shape == .pill
+            ),
+            ctx
+        )
         guard let image = finish(ctx) else { return nil }
-        cache.setObject(image, forKey: key)
+        let cost = max(1, Int(renderSize.width.rounded()) * Int(renderSize.height.rounded()) * 4)
+        cache.setObject(image, forKey: key, cost: cost)
         return image
     }
 
@@ -120,11 +153,20 @@ enum TextFrameRenderer {
     // MARK: - Per-word
 
     private static func renderPerWord(clip: Clip, content: String, style: TextStyle, box: CGRect,
+                                      textRect: CGRect,
                                       fontSize: CGFloat, anim: TextAnimation, frame: Int, renderSize: CGSize) -> CIImage? {
-        guard let ctx = beginContext(style: style, box: box, renderSize: renderSize) else { return nil }
-
+        guard let ctx = beginContext(renderSize: renderSize) else { return nil }
         let attr = NSAttributedString(string: content, attributes: style.attributes(size: fontSize))
-        let ctFrame = layoutFrame(attr, box: box)
+        drawBackground(
+            ctx, attributed: attr, style: style, box: box, textRect: textRect,
+            fontSize: fontSize, renderSize: renderSize
+        )
+        applyShadow(ctx, style: style, renderSize: renderSize)
+        let ctFrame = layoutFrame(
+            attr,
+            box: textRect,
+            finiteHeight: style.background.enabled && style.background.shape == .pill
+        )
         let lines = CTFrameGetLines(ctFrame) as? [CTLine] ?? []
         var origins = [CGPoint](repeating: .zero, count: lines.count)
         CTFrameGetLineOrigins(ctFrame, CFRange(location: 0, length: 0), &origins)
@@ -145,7 +187,7 @@ enum TextFrameRenderer {
 
                 let startOff = CTLineGetOffsetForStringIndex(line, tok.range.location, nil)
                 let endOff = CTLineGetOffsetForStringIndex(line, tok.range.location + tok.range.length, nil)
-                let penX = box.minX + origins[li].x + startOff
+                let penX = textRect.minX + origins[li].x + startOff
                 let penY = origins[li].y
                 let wWidth = endOff - startOff
 
@@ -191,8 +233,9 @@ enum TextFrameRenderer {
     // MARK: - Typewriter (whole-clip character reveal)
 
     private static func renderTypewriter(clip: Clip, content: String, style: TextStyle, box: CGRect,
+                                         textRect: CGRect,
                                          fontSize: CGFloat, frame: Int, renderSize: CGSize) -> CIImage? {
-        guard let ctx = beginContext(style: style, box: box, renderSize: renderSize) else { return nil }
+        guard let ctx = beginContext(renderSize: renderSize) else { return nil }
         let rel = frame - clip.startFrame
         let ns = content as NSString
 
@@ -215,14 +258,34 @@ enum TextFrameRenderer {
         // Caret blinks (~0.5s) until shortly after the last word finishes.
         let doneAt = timings.last?.endFrame ?? clip.durationFrames
         if rel <= doneAt + 18, (rel / 15) % 2 == 0 { visible += "|" }
-        guard !visible.isEmpty else { return finish(ctx) }
+        guard !visible.isEmpty else {
+            drawBackground(
+                ctx, attributed: NSAttributedString(), style: style, box: box, textRect: textRect,
+                fontSize: fontSize, renderSize: renderSize
+            )
+            return finish(ctx)
+        }
         // Left-anchor so the text reveals rightward in place rather than re-centering as it grows.
         var attrs = style.attributes(size: fontSize)
         let para = NSMutableParagraphStyle()
         para.alignment = .left
         para.lineBreakMode = .byWordWrapping
+        para.lineHeightMultiple = CGFloat(style.clampedLineHeightMultiple)
         attrs[.paragraphStyle] = para
-        CTFrameDraw(layoutFrame(NSAttributedString(string: visible, attributes: attrs), box: box), ctx)
+        let attributed = NSAttributedString(string: visible, attributes: attrs)
+        drawBackground(
+            ctx, attributed: attributed, style: style, box: box, textRect: textRect,
+            fontSize: fontSize, renderSize: renderSize
+        )
+        applyShadow(ctx, style: style, renderSize: renderSize)
+        CTFrameDraw(
+            layoutFrame(
+                attributed,
+                box: textRect,
+                finiteHeight: style.background.enabled && style.background.shape == .pill
+            ),
+            ctx
+        )
         return finish(ctx)
     }
 
@@ -402,11 +465,38 @@ enum TextFrameRenderer {
 
     // MARK: - Shared drawing
 
-    private static func drawBox(_ ctx: CGContext, style: TextStyle, box: CGRect) {
-        if style.background.enabled {
-            ctx.setFillColor(cgColor(style.background.color))
+    private static func drawBackground(
+        _ ctx: CGContext,
+        attributed: NSAttributedString,
+        style: TextStyle,
+        box: CGRect,
+        textRect: CGRect,
+        fontSize: CGFloat,
+        renderSize: CGSize
+    ) {
+        guard style.background.enabled else { return }
+        ctx.setFillColor(cgColor(style.background.color))
+        guard style.background.shape == .pill else {
             ctx.fill(box)
+            return
         }
+        let topDownTextArea = CGRect(
+            x: textRect.minX,
+            y: renderSize.height - textRect.maxY,
+            width: textRect.width,
+            height: textRect.height
+        )
+        guard let path = TextBackgroundPath.path(
+            for: attributed,
+            textArea: topDownTextArea,
+            fontSize: fontSize,
+            lineHeightMultiple: CGFloat(style.clampedLineHeightMultiple),
+            background: style.background
+        ) else { return }
+        var flip = CGAffineTransform(a: 1, b: 0, c: 0, d: -1, tx: 0, ty: renderSize.height)
+        guard let flipped = path.copy(using: &flip) else { return }
+        ctx.addPath(flipped)
+        ctx.fillPath()
     }
 
     private static func applyShadow(_ ctx: CGContext, style: TextStyle, renderSize: CGSize) {

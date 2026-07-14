@@ -64,6 +64,31 @@ struct UndoToolTests {
         #expect(h.editor.timeline.tracks[0].clips[0].volume == 1.0)
     }
 
+    @Test func groupedTextTracksUndoAndRedoAtomically() async throws {
+        let h = ToolHarness()
+        let um = UndoManager()
+        h.editor.undoManager = um
+        let result = await h.runRaw("add_texts", args: [
+            "entries": [
+                ["trackGroup": "line-1", "startFrame": 0, "endFrame": 20, "content": "one"],
+                ["trackGroup": "line-1", "startFrame": 20, "endFrame": 60, "content": "one two"],
+                ["trackGroup": "line-2", "startFrame": 30, "endFrame": 60, "content": "three"],
+            ]
+        ])
+
+        #expect(result.isError == false, "\(ToolHarness.textOf(result))")
+        #expect(h.editor.timeline.tracks.count == 2)
+        #expect(h.editor.timeline.tracks.flatMap(\.clips).count == 3)
+
+        let undoResult = await h.runRaw("undo")
+        #expect(undoResult.isError == false, "\(ToolHarness.textOf(undoResult))")
+        #expect(h.editor.timeline.tracks.isEmpty)
+
+        um.redo()
+        #expect(h.editor.timeline.tracks.count == 2)
+        #expect(h.editor.timeline.tracks.flatMap(\.clips).count == 3)
+    }
+
     @Test func refusesWhenAssistantHasNotEdited() async throws {
         let (h, um) = harness()
         _ = um

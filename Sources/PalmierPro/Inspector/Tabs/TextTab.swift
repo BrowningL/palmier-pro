@@ -16,13 +16,26 @@ struct TextTab: View {
                 fontRow
                 styleRow
                 sizeSlider
+                lineHeightRow
             }
             InspectorSection("Appearance") {
                 colorRow
                 opacitySlider
-                backgroundRow
                 borderRow
+                if style.border.enabled { strokeWidthRow }
                 shadowRow
+            }
+            InspectorSection("Background") {
+                backgroundRow
+                if style.background.enabled {
+                    backgroundShapeRow
+                    if style.background.shape == .pill {
+                        backgroundPaddingHRow
+                        backgroundPaddingVRow
+                        backgroundCornerRow
+                    }
+                }
+                backgroundPresetRow
             }
             InspectorSection("Layout") {
                 alignmentRow
@@ -111,6 +124,27 @@ struct TextTab: View {
         }
     }
 
+    private var lineHeightRow: some View {
+        InspectorRow(icon: "arrow.up.and.down.text.horizontal", label: "Line Height") {
+            ScrubbableNumberField(
+                value: sharedTextStyleValue { $0.lineHeightMultiple },
+                range: TextStyle.lineHeightRange,
+                displayMultiplier: 100,
+                format: "%.0f",
+                valueSuffix: "%",
+                onChanged: { value in
+                    editor.applyTextStyles(clipIds: clipIds, fitToContent: true) {
+                        $0.lineHeightMultiple = value
+                    }
+                }
+            ) { value in
+                editor.commitTextStyles(clipIds: clipIds, fitToContent: true) {
+                    $0.lineHeightMultiple = value
+                }
+            }
+        }
+    }
+
     private var opacitySlider: some View {
         InspectorRow(icon: "circle.lefthalf.filled", label: "Opacity") {
             ScrubbableNumberField(
@@ -172,7 +206,8 @@ struct TextTab: View {
             color: style.background.color.swiftUIColor,
             debounceKey: "backgroundColor",
             setEnabled: { $0.background.enabled = $1 },
-            setColor: { $0.background.color = $1 }
+            setColor: { $0.background.color = $1 },
+            fitToContent: true
         )
     }
 
@@ -184,8 +219,126 @@ struct TextTab: View {
             color: style.border.color.swiftUIColor,
             debounceKey: "borderColor",
             setEnabled: { $0.border.enabled = $1 },
-            setColor: { $0.border.color = $1 }
+            setColor: { $0.border.color = $1 },
+            fitToContent: true
         )
+    }
+
+    private var strokeWidthRow: some View {
+        InspectorRow(icon: "lineweight", label: "Thickness") {
+            ScrubbableNumberField(
+                value: sharedTextStyleValue { $0.border.width },
+                range: TextStyle.Stroke.widthRange,
+                format: "%.1f",
+                valueSuffix: "%",
+                onChanged: { value in
+                    editor.applyTextStyles(clipIds: clipIds, fitToContent: true) { $0.border.width = value }
+                }
+            ) { value in
+                editor.commitTextStyles(clipIds: clipIds, fitToContent: true) { $0.border.width = value }
+            }
+        }
+    }
+
+    private var backgroundShapeRow: some View {
+        InspectorRow(icon: "rectangle.on.rectangle", label: "Shape") {
+            Picker(
+                "",
+                selection: Binding(
+                    get: { style.background.shape },
+                    set: { shape in
+                        editor.commitTextStyles(clipIds: clipIds, fitToContent: true) {
+                            $0.background.shape = shape
+                        }
+                    }
+                )
+            ) {
+                Text("Box").tag(TextStyle.Background.Shape.box)
+                Text("Pill").tag(TextStyle.Background.Shape.pill)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .fixedSize()
+        }
+    }
+
+    private func backgroundMetricRow(
+        icon: String,
+        label: String,
+        value: Double?,
+        range: ClosedRange<Double>,
+        fitToContent: Bool,
+        set: @escaping (inout TextStyle, Double) -> Void
+    ) -> some View {
+        InspectorRow(icon: icon, label: label) {
+            ScrubbableNumberField(
+                value: value,
+                range: range,
+                displayMultiplier: 100,
+                format: "%.0f",
+                valueSuffix: "%",
+                onChanged: { newValue in
+                    editor.applyTextStyles(clipIds: clipIds, fitToContent: fitToContent) {
+                        set(&$0, newValue)
+                    }
+                }
+            ) { newValue in
+                editor.commitTextStyles(clipIds: clipIds, fitToContent: fitToContent) {
+                    set(&$0, newValue)
+                }
+            }
+        }
+    }
+
+    private var backgroundPaddingHRow: some View {
+        backgroundMetricRow(
+            icon: "arrow.left.and.right",
+            label: "Padding H",
+            value: sharedTextStyleValue { $0.background.paddingH },
+            range: TextStyle.Background.paddingRange,
+            fitToContent: true,
+            set: { $0.background.paddingH = $1 }
+        )
+    }
+
+    private var backgroundPaddingVRow: some View {
+        backgroundMetricRow(
+            icon: "arrow.up.and.down",
+            label: "Padding V",
+            value: sharedTextStyleValue { $0.background.paddingV },
+            range: TextStyle.Background.paddingRange,
+            fitToContent: true,
+            set: { $0.background.paddingV = $1 }
+        )
+    }
+
+    private var backgroundCornerRow: some View {
+        backgroundMetricRow(
+            icon: "rectangle.roundedtop",
+            label: "Corner",
+            value: sharedTextStyleValue { $0.background.cornerRadius },
+            range: TextStyle.Background.cornerRadiusRange,
+            fitToContent: false,
+            set: { $0.background.cornerRadius = $1 }
+        )
+    }
+
+    private var backgroundPresetRow: some View {
+        InspectorRow(icon: "wand.and.stars", label: "Preset") {
+            HStack(spacing: AppTheme.Spacing.sm) {
+                presetButton("IG Dark", .instagramDark)
+                presetButton("IG Light", .instagramLight)
+            }
+        }
+    }
+
+    private func presetButton(_ title: String, _ preset: TextStyle.Preset) -> some View {
+        Button(title) {
+            editor.commitTextStyles(clipIds: clipIds, fitToContent: true) { $0.apply(preset) }
+        }
+        .font(.system(size: AppTheme.FontSize.sm, weight: AppTheme.FontWeight.medium))
+        .buttonStyle(.bordered)
+        .controlSize(.small)
     }
 
     private func toggleColorRow(
@@ -195,7 +348,8 @@ struct TextTab: View {
         color: Color,
         debounceKey: String,
         setEnabled: @escaping (inout TextStyle, Bool) -> Void,
-        setColor: @escaping (inout TextStyle, TextStyle.RGBA) -> Void
+        setColor: @escaping (inout TextStyle, TextStyle.RGBA) -> Void,
+        fitToContent: Bool = false
     ) -> some View {
         InspectorRow(icon: icon, label: label) {
             HStack(spacing: AppTheme.Spacing.sm) {
@@ -213,7 +367,11 @@ struct TextTab: View {
                     "",
                     isOn: Binding(
                         get: { enabled },
-                        set: { new in editor.commitTextStyles(clipIds: clipIds) { setEnabled(&$0, new) } }
+                        set: { new in
+                            editor.commitTextStyles(clipIds: clipIds, fitToContent: fitToContent) {
+                                setEnabled(&$0, new)
+                            }
+                        }
                     )
                 )
                 .labelsHidden()

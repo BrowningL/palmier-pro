@@ -6,6 +6,7 @@ import Foundation
 @MainActor
 enum BundledFonts {
     private static var registered = false
+    static let creatorConnectFamilies = ["Space Grotesk", "IBM Plex Mono"]
 
     private(set) static var families: [String] = []
 
@@ -29,8 +30,15 @@ enum BundledFonts {
             await MainActor.run {
                 families = familySet.sorted()
                 cachedSystemFamilies = system
+                TextFrameRenderer.clearCache()
             }
         }
+    }
+
+    static var featuredFamiliesForPicker: [String] {
+        let available = Set(families)
+        let pinned = creatorConnectFamilies.filter { available.contains($0) }
+        return pinned + families.filter { !creatorConnectFamilies.contains($0) }
     }
 
     private nonisolated static func registerFonts(under fontsRoot: URL) -> Set<String> {
